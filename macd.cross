@@ -9,6 +9,7 @@ from telegram import Bot
 import bitgetconfig  # Import the bitgetconfig module
 import ta  # Import ta library
 
+# Configurations
 interval = '15m'  # Set to '4h' for main conditions
 daily_interval = '4h'  # Use '1d' for daily amplitude ratio
 
@@ -24,14 +25,16 @@ last_alert_messages = {}
 
 # Function to get historical candlestick data
 def get_historical_data(symbol, interval, limit=50):
-    ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    
-    # Rename columns to match mplfinance format
-    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-    return df
+    try:
+        ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        return df
+    except Exception as e:
+        print(f"Error fetching historical data for {symbol}: {e}")
+        return pd.DataFrame()  # Return empty DataFrame on failure
 
 # Function to calculate EMA using ta library
 def calculate_ema(df, period):
@@ -68,36 +71,41 @@ def check_ema_cross(df, short_period=3, long_period=7):
 
 # Function to calculate daily amplitude ratio
 def calculate_daily_amplitude_ratio(symbol):
-    daily_data = get_historical_data(symbol, daily_interval, limit=3)
-    current_ratio = daily_data['High'].iloc[-2] / daily_data['Low'].iloc[-2]
-    prev_ratio = daily_data['High'].iloc[-3] / daily_data['Low'].iloc[-3]
-    third_last_ratio = daily_data['High'].iloc[-4] / daily_data['Low'].iloc[-4]
+    try:
+        daily_data = get_historical_data(symbol, daily_interval, limit=3)
 
-    return max(current_ratio, prev_ratio, third_last_ratio)
+        if len(daily_data) < 3:
+            raise ValueError(f"Not enough data for {symbol} to calculate daily amplitude ratio")
+
+        if 'High' not in daily_data or 'Low' not in daily_data:
+            raise ValueError(f"Missing required columns in daily data for {symbol}")
+
+        current_ratio = daily_data['High'].iloc[-2] / daily_data['Low'].iloc[-2]
+        prev_ratio = daily_data['High'].iloc[-3] / daily_data['Low'].iloc[-3]
+        third_last_ratio = daily_data['High'].iloc[-4] / daily_data['Low'].iloc[-4]
+
+        return max(current_ratio, prev_ratio, third_last_ratio)
+    except Exception as e:
+        print(f"Error calculating daily amplitude ratio for {symbol}: {e}")
+        return None
 
 # Updated function to plot candlesticks with EMA lines and MACD Histogram
 def plot_candles(df, symbol, title):
     mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
     
-    # Create custom market colors for up and down candlesticks
     mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
-
-    # Create a custom style using the market colors and other style settings
     s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
 
-    # Add EMA lines and MACD Histogram to the plot
     short_ema = calculate_ema(df, 3)
     long_ema = calculate_ema(df, 7)
-    calculate_macd(df)  # Calculate MACD values for plotting
+    calculate_macd(df)
 
-    # Set dynamic colors for the MACD histogram based on the comparison with the previous value
     macd_colors = [
         'green' if df['histogram'].iloc[i] > df['histogram'].iloc[i - 1] else 'red'
         for i in range(1, len(df['histogram']))
     ]
-    macd_colors.insert(0, 'gray')  # First histogram bar has no previous bar to compare
+    macd_colors.insert(0, 'gray')
 
-    # Plot figure with custom ratio and return it for further customization
     fig, axlist = mpf.plot(
         mpf_data,
         figratio=(10, 6),
@@ -114,17 +122,12 @@ def plot_candles(df, symbol, title):
         returnfig=True
     )
 
-    # Add Title
     axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
 
-    # Save plot to a BytesIO object
     buf = BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
     buf.seek(0)
-
-    # Close the figure to avoid memory overflow
     plt.close(fig)
-
     return buf
 
 # Function to send Telegram message and image
@@ -139,37 +142,35 @@ async def main():
     while True:
         for symbol in bitgetconfig.SELECTED_SYMBOLS:
             try:
-                # Fetch historical data
                 historical_data = get_historical_data(symbol, interval)
-                
-                # Calculate MACD to ensure columns are available
-                calculate_macd(historical_data)
-                
-                # Check daily amplitude ratio
-                daily_amplitude_ratio = calculate_daily_amplitude_ratio(symbol)
-                
-                # Only proceed if daily amplitude ratio exceeds threshold
-                if daily_amplitude_ratio >= 1.05:
-                    # Check MACD and EMA crossovers
-                    macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
-                    ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
+                if historical_data.empty:
+                    print(f"No data for {symbol}, skipping...")
+                    continue
 
-                    # MACD cross events
-                    if macd_cross_over:
-                        message = f'MACD Cross over detected on #{symbol} (Daily Amplitude Ratio: {daily_amplitude_ratio:.2f})'
-                        title = f'MACD Cross Over for {symbol}'
-                        image_buffer = plot_candles(historical_data, symbol, title)
-                        await send_telegram_message(symbol, message, image_buffer)
-                    elif macd_cross_under:
-                        message = f'MACD Cross under detected on #{symbol} (Daily Amplitude Ratio: {daily_amplitude_ratio:.2f})'
-                        title = f'MACD Cross Under for {symbol}'
-                        image_buffer = plot_candles(historical_data, symbol, title)
-                        await send_telegram_message(symbol, message, image_buffer)
+                calculate_macd(historical_data)
+
+                daily_amplitude_ratio = calculate_daily_amplitude_ratio(symbol)
+                if not daily_amplitude_ratio or daily_amplitude_ratio < 1.05:
+                    continue
+
+                macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
+                ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
+
+                if macd_cross_over:
+                    message = f'MACD Cross over detected on #{symbol} (Daily Amplitude Ratio: {daily_amplitude_ratio:.2f})'
+                    title = f'MACD Cross Over for {symbol}'
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
+                elif macd_cross_under:
+                    message = f'MACD Cross under detected on #{symbol} (Daily Amplitude Ratio: {daily_amplitude_ratio:.2f})'
+                    title = f'MACD Cross Under for {symbol}'
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(300)  # Adjust sleep duration as needed
+        await asyncio.sleep(300)
 
 # Initialize Telegram Bot
 telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
@@ -177,5 +178,5 @@ telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
 # Use nest_asyncio for Jupyter compatibility
 nest_asyncio.apply()
 
-# Create and run the event loop
+# Run the event loop
 asyncio.run(main())
