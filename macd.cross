@@ -37,15 +37,21 @@ def get_historical_data(symbol, interval, limit=50):
 def calculate_ema(df, period):
     return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
 
-# Function to calculate MACD using ta library
+# Function to calculate MACD using ta library with error handling
 def calculate_macd(df):
+    if len(df) < 35:  # Ensure enough data for MACD calculation
+        print("Not enough data to calculate MACD")
+        return False
     macd = ta.trend.MACD(df['Close'])
     df['macd'] = macd.macd()
     df['signal'] = macd.macd_signal()
     df['histogram'] = macd.macd_diff()
+    return 'macd' in df and 'signal' in df
 
 # Function to check MACD cross
 def check_macd_cross(df):
+    if 'macd' not in df or 'signal' not in df:
+        return False, False  # Skip processing if MACD columns are not available
     macd_curr = df['macd'].iloc[-2]
     signal_curr = df['signal'].iloc[-2]
     macd_prev = df['macd'].iloc[-3]
@@ -69,14 +75,10 @@ def check_ema_cross(df, short_period=3, long_period=7):
 # Function to calculate daily amplitude ratios
 def calculate_daily_amplitude_ratio(symbol):
     try:
-        # Fetch up to 4 periods of 4-hour data to ensure sufficient rows
         daily_data = get_historical_data(symbol, daily_interval, limit=5)
-
-        # Ensure there are enough candles to calculate ratios
         if len(daily_data) < 3:
             raise ValueError(f"Insufficient data for {symbol}: {len(daily_data)} rows available")
 
-        # Calculate amplitude ratios for current, previous, and third-last candles
         current_ratio = daily_data['High'].iloc[-1] / daily_data['Low'].iloc[-1]
         previous_ratio = daily_data['High'].iloc[-2] / daily_data['Low'].iloc[-2]
         third_last_ratio = daily_data['High'].iloc[-3] / daily_data['Low'].iloc[-3]
@@ -88,7 +90,7 @@ def calculate_daily_amplitude_ratio(symbol):
         }
     except Exception as e:
         print(f"Error calculating daily amplitude ratio for {symbol}: {e}")
-        return None  # Return None if there is an error
+        return None
 
 # Function to plot candlesticks with EMA lines and MACD Histogram
 def plot_candles(df, symbol, title):
@@ -152,6 +154,11 @@ async def main():
 
                 if max_amplitude_ratio < 1.05:
                     print(f"Skipping {symbol}: Amplitude ratios below threshold ({max_amplitude_ratio:.2f})")
+                    continue
+
+                # Calculate MACD only if columns are created successfully
+                if not calculate_macd(historical_data):
+                    print(f"Skipping {symbol}: MACD calculation failed.")
                     continue
 
                 macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
