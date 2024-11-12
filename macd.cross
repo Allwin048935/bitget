@@ -100,8 +100,8 @@ def plot_candles(df, symbol, title):
         addplot=[
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
             mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
-            mpf.make_addplot(df['macd'], color='green', width=1.5, linestyle='-', panel=1),
-            mpf.make_addplot(df['signal'], color='red', width=1.5, linestyle='-', panel=1),
+            mpf.make_addplot(df['macd'], color='blue', width=1.5, linestyle='-', panel=1),
+            mpf.make_addplot(df['signal'], color='orange', width=1.5, linestyle='-', panel=1),
             mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD")
         ],
         returnfig=True
@@ -157,7 +157,7 @@ async def main():
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(900)  # Sleep duration as needed
+        await asyncio.sleep(300)  # Sleep duration as needed
 
 # Initialize Telegram Bot
 telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
