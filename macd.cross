@@ -9,7 +9,8 @@ from telegram import Bot
 import bitgetconfig  # Import the bitgetconfig module
 import ta  # Import ta library
 
-interval = '15m'  # Set to '4h' for 4-hour candlesticks
+interval = '15m'  # Set to '4h' for main conditions
+daily_interval = '4h'  # Use '1d' for daily amplitude ratio
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
@@ -65,11 +66,12 @@ def check_ema_cross(df, short_period=3, long_period=7):
 
     return cross_over, cross_under
 
-# Function to calculate amplitude ratio
-def calculate_amplitude_ratio(df):
-    current_ratio = df['High'].iloc[-2] / df['Low'].iloc[-2]
-    prev_ratio = df['High'].iloc[-3] / df['Low'].iloc[-3]
-    third_last_ratio = df['High'].iloc[-4] / df['Low'].iloc[-4]
+# Function to calculate daily amplitude ratio
+def calculate_daily_amplitude_ratio(symbol):
+    daily_data = get_historical_data(symbol, daily_interval, limit=3)
+    current_ratio = daily_data['High'].iloc[-2] / daily_data['Low'].iloc[-2]
+    prev_ratio = daily_data['High'].iloc[-3] / daily_data['Low'].iloc[-3]
+    third_last_ratio = daily_data['High'].iloc[-4] / daily_data['Low'].iloc[-4]
 
     return max(current_ratio, prev_ratio, third_last_ratio)
 
@@ -143,23 +145,23 @@ async def main():
                 # Calculate MACD to ensure columns are available
                 calculate_macd(historical_data)
                 
-                # Check amplitude ratio
-                amplitude_ratio = calculate_amplitude_ratio(historical_data)
+                # Check daily amplitude ratio
+                daily_amplitude_ratio = calculate_daily_amplitude_ratio(symbol)
                 
-                # Only proceed if amplitude ratio exceeds threshold
-                if amplitude_ratio >= 1.05:
+                # Only proceed if daily amplitude ratio exceeds threshold
+                if daily_amplitude_ratio >= 1.05:
                     # Check MACD and EMA crossovers
                     macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
                     ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
 
                     # MACD cross events
                     if macd_cross_over:
-                        message = f'MACD Cross over detected on #{symbol} (Amplitude Ratio: {amplitude_ratio:.2f})'
+                        message = f'MACD Cross over detected on #{symbol} (Daily Amplitude Ratio: {daily_amplitude_ratio:.2f})'
                         title = f'MACD Cross Over for {symbol}'
                         image_buffer = plot_candles(historical_data, symbol, title)
                         await send_telegram_message(symbol, message, image_buffer)
                     elif macd_cross_under:
-                        message = f'MACD Cross under detected on #{symbol} (Amplitude Ratio: {amplitude_ratio:.2f})'
+                        message = f'MACD Cross under detected on #{symbol} (Daily Amplitude Ratio: {daily_amplitude_ratio:.2f})'
                         title = f'MACD Cross Under for {symbol}'
                         image_buffer = plot_candles(historical_data, symbol, title)
                         await send_telegram_message(symbol, message, image_buffer)
