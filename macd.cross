@@ -152,7 +152,7 @@ async def main():
 
                 max_amplitude_ratio = max(amplitude_ratios.values())
 
-                if max_amplitude_ratio <= 1.05:
+                if max_amplitude_ratio < 1.05:
                     print(f"Skipping {symbol}: Amplitude ratios below threshold ({max_amplitude_ratio:.2f})")
                     continue
 
@@ -160,7 +160,7 @@ async def main():
                 ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
 
                 if macd_cross_over:
-                    message = f'/set_symbols {symbol}' #MACD Cross over detected on #{symbol} (Max Amplitude Ratio: {max_amplitude_ratio:.2f})
+                    message = f'/set_symbols {symbol}'
                     title = f'MACD Cross Over for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
