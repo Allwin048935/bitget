@@ -39,8 +39,8 @@ def calculate_macd(df):
 
 # Function to check MACD crossover
 def check_macd_crossover(df):
-    cross_over = df['macd'].iloc[-2] < df['signal'].iloc[-2] and df['macd'].iloc[-1] > df['signal'].iloc[-1]
-    cross_under = df['macd'].iloc[-2] > df['signal'].iloc[-2] and df['macd'].iloc[-1] < df['signal'].iloc[-1]
+    cross_over = df['macd'].iloc[-3] < df['signal'].iloc[-3] and df['macd'].iloc[-2] > df['signal'].iloc[-2]
+    cross_under = df['macd'].iloc[-3] > df['signal'].iloc[-3] and df['macd'].iloc[-2] < df['signal'].iloc[-2]
     return cross_over, cross_under
 
 # Function to send a message to Telegram
@@ -110,7 +110,7 @@ async def main_trading():
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(60)
 
 # Start Telegram bot
 async def start_telegram_bot():
