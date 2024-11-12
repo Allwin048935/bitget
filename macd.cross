@@ -118,8 +118,8 @@ def plot_candles(df, symbol, title):
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
             mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
             mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram"),
-            mpf.make_addplot(df['macd'], color='blue', width=1.5, panel=1, linestyle='-'),
-            mpf.make_addplot(df['signal'], color='orange', width=1.5, panel=1, linestyle='-'),
+            mpf.make_addplot(df['macd'], color='cyan', width=1.5, panel=1, linestyle='-'),
+            mpf.make_addplot(df['signal'], color='magenta', width=1.5, panel=1, linestyle='-'),
         ],
         returnfig=True
     )
