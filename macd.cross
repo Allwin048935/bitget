@@ -37,21 +37,15 @@ def get_historical_data(symbol, interval, limit=50):
 def calculate_ema(df, period):
     return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
 
-# Function to calculate MACD using ta library with error handling
+# Function to calculate MACD using ta library
 def calculate_macd(df):
-    if len(df) < 35:  # Ensure enough data for MACD calculation
-        print("Not enough data to calculate MACD")
-        return False
     macd = ta.trend.MACD(df['Close'])
     df['macd'] = macd.macd()
     df['signal'] = macd.macd_signal()
     df['histogram'] = macd.macd_diff()
-    return 'macd' in df and 'signal' in df
 
 # Function to check MACD cross
 def check_macd_cross(df):
-    if 'macd' not in df or 'signal' not in df:
-        return False, False  # Skip processing if MACD columns are not available
     macd_curr = df['macd'].iloc[-2]
     signal_curr = df['signal'].iloc[-2]
     macd_prev = df['macd'].iloc[-3]
@@ -75,10 +69,14 @@ def check_ema_cross(df, short_period=3, long_period=7):
 # Function to calculate daily amplitude ratios
 def calculate_daily_amplitude_ratio(symbol):
     try:
+        # Fetch up to 4 periods of 4-hour data to ensure sufficient rows
         daily_data = get_historical_data(symbol, daily_interval, limit=5)
+
+        # Ensure there are enough candles to calculate ratios
         if len(daily_data) < 3:
             raise ValueError(f"Insufficient data for {symbol}: {len(daily_data)} rows available")
 
+        # Calculate amplitude ratios for current, previous, and third-last candles
         current_ratio = daily_data['High'].iloc[-1] / daily_data['Low'].iloc[-1]
         previous_ratio = daily_data['High'].iloc[-2] / daily_data['Low'].iloc[-2]
         third_last_ratio = daily_data['High'].iloc[-3] / daily_data['Low'].iloc[-3]
@@ -90,9 +88,9 @@ def calculate_daily_amplitude_ratio(symbol):
         }
     except Exception as e:
         print(f"Error calculating daily amplitude ratio for {symbol}: {e}")
-        return None
+        return None  # Return None if there is an error
 
-# Function to plot candlesticks with EMA lines and MACD Histogram
+# Function to plot candlesticks with EMA lines, MACD Histogram, and MACD and signal lines
 def plot_candles(df, symbol, title):
     mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
     mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
@@ -119,7 +117,9 @@ def plot_candles(df, symbol, title):
         addplot=[
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
             mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
-            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram")
+            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram"),
+            mpf.make_addplot(df['macd'], color='blue', width=1.5, panel=1, linestyle='-'),
+            mpf.make_addplot(df['signal'], color='orange', width=1.5, panel=1, linestyle='-'),
         ],
         returnfig=True
     )
@@ -152,25 +152,20 @@ async def main():
 
                 max_amplitude_ratio = max(amplitude_ratios.values())
 
-                if max_amplitude_ratio < 1.05:
+                if max_amplitude_ratio <= 1.05:
                     print(f"Skipping {symbol}: Amplitude ratios below threshold ({max_amplitude_ratio:.2f})")
-                    continue
-
-                # Calculate MACD only if columns are created successfully
-                if not calculate_macd(historical_data):
-                    print(f"Skipping {symbol}: MACD calculation failed.")
                     continue
 
                 macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
                 ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
 
                 if macd_cross_over:
-                    message = f'MACD Cross over detected on #{symbol} (Max Amplitude Ratio: {max_amplitude_ratio:.2f})'
+                    message = f'/set_symbols {symbol}' #MACD Cross over detected on #{symbol} (Max Amplitude Ratio: {max_amplitude_ratio:.2f})
                     title = f'MACD Cross Over for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
                 elif macd_cross_under:
-                    message = f'MACD Cross under detected on #{symbol} (Max Amplitude Ratio: {max_amplitude_ratio:.2f})'
+                    message = f'/set_symbols {symbol}'
                     title = f'MACD Cross Under for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
