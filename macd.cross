@@ -145,6 +145,7 @@ async def main():
         for symbol in bitgetconfig.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
+                calculate_macd(historical_data)  # Ensure MACD is calculated before any MACD-dependent checks
                 amplitude_ratios = calculate_daily_amplitude_ratio(symbol)
 
                 if amplitude_ratios is None:
