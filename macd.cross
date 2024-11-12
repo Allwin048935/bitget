@@ -9,7 +9,7 @@ from telegram import Bot
 import bitgetconfig  # Import the bitgetconfig module
 import ta  # Import ta library
 
-interval = '15m'  # Adjust to '4h' if you need 4-hour candlesticks
+interval = '15m'  # Set to '4h' for 4-hour candlesticks
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
@@ -43,16 +43,15 @@ def calculate_macd(df):
     df['signal'] = macd.macd_signal()
     df['histogram'] = macd.macd_diff()
 
-# Function to check MACD line cross
+# Function to check MACD cross
 def check_macd_cross(df):
-    if 'macd' not in df or 'signal' not in df:
-        return False, False
-    
-    macd_prev, signal_prev = df['macd'].iloc[-3], df['signal'].iloc[-3]
-    macd_curr, signal_curr = df['macd'].iloc[-2], df['signal'].iloc[-2]
+    macd_curr = df['macd'].iloc[-2]
+    signal_curr = df['signal'].iloc[-2]
+    macd_prev = df['macd'].iloc[-3]
+    signal_prev = df['signal'].iloc[-3]
 
-    cross_over = macd_curr > signal_curr and macd_prev <= signal_prev
-    cross_under = macd_curr < signal_curr and macd_prev >= signal_prev
+    cross_over = macd_prev <= signal_prev and macd_curr > signal_curr
+    cross_under = macd_prev >= signal_prev and macd_curr < signal_curr
 
     return cross_over, cross_under
 
@@ -66,7 +65,15 @@ def check_ema_cross(df, short_period=3, long_period=7):
 
     return cross_over, cross_under
 
-# Updated function to plot candlesticks with EMA, MACD lines, and MACD histogram
+# Function to calculate amplitude ratio
+def calculate_amplitude_ratio(df):
+    current_ratio = df['High'].iloc[-2] / df['Low'].iloc[-2]
+    prev_ratio = df['High'].iloc[-3] / df['Low'].iloc[-3]
+    third_last_ratio = df['High'].iloc[-4] / df['Low'].iloc[-4]
+
+    return max(current_ratio, prev_ratio, third_last_ratio)
+
+# Updated function to plot candlesticks with EMA lines and MACD Histogram
 def plot_candles(df, symbol, title):
     mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
     
@@ -76,7 +83,7 @@ def plot_candles(df, symbol, title):
     # Create a custom style using the market colors and other style settings
     s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
 
-    # Add EMA lines, MACD lines, and MACD Histogram to the plot
+    # Add EMA lines and MACD Histogram to the plot
     short_ema = calculate_ema(df, 3)
     long_ema = calculate_ema(df, 7)
     calculate_macd(df)  # Calculate MACD values for plotting
@@ -86,7 +93,7 @@ def plot_candles(df, symbol, title):
         'green' if df['histogram'].iloc[i] > df['histogram'].iloc[i - 1] else 'red'
         for i in range(1, len(df['histogram']))
     ]
-    macd_colors.insert(0, 'gray')  # Add a neutral color for the first histogram bar
+    macd_colors.insert(0, 'gray')  # First histogram bar has no previous bar to compare
 
     # Plot figure with custom ratio and return it for further customization
     fig, axlist = mpf.plot(
@@ -100,9 +107,7 @@ def plot_candles(df, symbol, title):
         addplot=[
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
             mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
-            mpf.make_addplot(df['macd'], color='blue', width=1.5, linestyle='-', panel=1),
-            mpf.make_addplot(df['signal'], color='orange', width=1.5, linestyle='-', panel=1),
-            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD")
+            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram")
         ],
         returnfig=True
     )
@@ -138,26 +143,31 @@ async def main():
                 # Calculate MACD to ensure columns are available
                 calculate_macd(historical_data)
                 
-                # Check MACD and EMA crossovers
-                cross_over, cross_under = check_macd_cross(historical_data)
-                ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
+                # Check amplitude ratio
+                amplitude_ratio = calculate_amplitude_ratio(historical_data)
+                
+                # Only proceed if amplitude ratio exceeds threshold
+                if amplitude_ratio >= 1.05:
+                    # Check MACD and EMA crossovers
+                    macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
+                    ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
 
-                # MACD cross events
-                if cross_over:
-                    message = f'/set_symbols {symbol}'
-                    title = f'MACD Cross Over for {symbol}'
-                    image_buffer = plot_candles(historical_data, symbol, title)
-                    await send_telegram_message(symbol, message, image_buffer)
-                elif cross_under:
-                    message = f'/set_symbols {symbol}'
-                    title = f'MACD Cross Under for {symbol}'
-                    image_buffer = plot_candles(historical_data, symbol, title)
-                    await send_telegram_message(symbol, message, image_buffer)
+                    # MACD cross events
+                    if macd_cross_over:
+                        message = f'MACD Cross over detected on #{symbol} (Amplitude Ratio: {amplitude_ratio:.2f})'
+                        title = f'MACD Cross Over for {symbol}'
+                        image_buffer = plot_candles(historical_data, symbol, title)
+                        await send_telegram_message(symbol, message, image_buffer)
+                    elif macd_cross_under:
+                        message = f'MACD Cross under detected on #{symbol} (Amplitude Ratio: {amplitude_ratio:.2f})'
+                        title = f'MACD Cross Under for {symbol}'
+                        image_buffer = plot_candles(historical_data, symbol, title)
+                        await send_telegram_message(symbol, message, image_buffer)
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(300)  # Sleep duration as needed
+        await asyncio.sleep(300)  # Adjust sleep duration as needed
 
 # Initialize Telegram Bot
 telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
