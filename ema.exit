@@ -62,14 +62,14 @@ def send_telegram_message(symbol, action, close_price):
         except requests.RequestException as e:
             print(f"Error sending Telegram request for {symbol}: {e}")
 
-# Updated function to set symbols by matching against config.AVAILABLE_SYMBOLS
+# Updated function to set symbols by matching against config.SELECTED_SYMBOLS
 async def set_symbols(update: Update, context) -> None:
     global selected_symbols
     user_symbols = context.args
 
     if user_symbols:
-        valid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() in config.AVAILABLE_SYMBOLS]
-        invalid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() not in config.AVAILABLE_SYMBOLS]
+        valid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() in config.SELECTED_SYMBOLS]
+        invalid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() not in config.SELECTED_SYMBOLS]
 
         new_symbols = [symbol for symbol in valid_symbols if symbol not in selected_symbols]
         selected_symbols.extend(new_symbols)
