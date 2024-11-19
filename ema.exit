@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from ta.trend import EMAIndicator  # Import EMA from the ta library
 
-interval = '4h'
+interval = '1h'
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
