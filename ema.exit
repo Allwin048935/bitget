@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from ta.trend import EMAIndicator  # Import EMA from the ta library
 
-interval = '2h'
+interval = '1h'
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
@@ -31,7 +31,7 @@ def get_historical_data(symbol, interval, limit=50):
     return df
 
 # Function to calculate EMA
-def calculate_ema(df, short_window=3, long_window=7):
+def calculate_ema(df, short_window=5, long_window=10):
     short_ema = EMAIndicator(close=df['close'], window=short_window)
     long_ema = EMAIndicator(close=df['close'], window=long_window)
     df['short_ema'] = short_ema.ema_indicator()
@@ -47,7 +47,7 @@ def check_ema_crossover(df):
 # Function to send a message to Telegram
 def send_telegram_message(symbol, action, close_price):
     if last_alert_messages.get(symbol) != action:
-        message = f"Alert: {symbol} - {action}\nPrice: {close_price}"
+        message = f"/{acton} {symbol}" #f"Alert: {symbol} - {action}\nPrice: {close_price}"
         url = f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/sendMessage"
         params = {"chat_id": config.TELEGRAM_CHAT_ID, "text": message}
         
