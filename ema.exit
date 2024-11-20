@@ -104,9 +104,9 @@ async def main_trading():
                 close_price = historical_data['close'].iloc[-1]
 
                 if cross_over:
-                    send_telegram_message(symbol, "enter_long", close_price)
+                    send_telegram_message(symbol, "/exit_short", close_price)
                 elif cross_under:
-                    send_telegram_message(symbol, "enter_short", close_price)
+                    send_telegram_message(symbol, "/exit_long", close_price)
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
