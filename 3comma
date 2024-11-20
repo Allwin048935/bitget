@@ -22,16 +22,24 @@ selected_symbols = []
 
 # Function to fetch all available trading pairs from Bitget
 def get_available_symbols():
-    markets = bitget.load_markets()
-    return list(markets.keys())
+    try:
+        markets = bitget.load_markets()
+        return list(markets.keys())
+    except Exception as e:
+        print(f"Error fetching symbols: {e}")
+        return []
 
 # Function to get historical candlestick data
 def get_historical_data(symbol, interval, limit=20):
-    ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    return df
+    try:
+        ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        return df
+    except Exception as e:
+        print(f"Error fetching historical data for {symbol}: {e}")
+        return pd.DataFrame()
 
 # Function to send a message to 3Commas using a webhook
 def send_3commas_message(symbol, action, close_price):
@@ -101,14 +109,19 @@ async def handle_alert(update: Update, context) -> None:
         command_parts = user_message.split()
 
         if len(command_parts) == 3:
-            action, symbol = command_parts[1], command_parts[2].upper()
+            _, action, symbol = command_parts
+            symbol = symbol.upper()
 
             if symbol in selected_symbols:
                 if action in ['long', 'short']:
-                    close_price = get_historical_data(symbol, '1m').iloc[-1]['close']
-                    action_key = f"enter_{action}"
-                    send_3commas_message(symbol, action_key, close_price)
-                    await update.message.reply_text(f"Alert sent: {action_key} for {symbol}")
+                    df = get_historical_data(symbol, '1m')
+                    if not df.empty:
+                        close_price = df.iloc[-1]['close']
+                        action_key = f"enter_{action}"
+                        send_3commas_message(symbol, action_key, close_price)
+                        await update.message.reply_text(f"Alert sent: {action_key} for {symbol}")
+                    else:
+                        await update.message.reply_text(f"Could not fetch data for {symbol}.")
                 else:
                     await update.message.reply_text("Invalid action. Use 'long' or 'short'.")
             else:
