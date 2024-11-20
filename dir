@@ -12,7 +12,7 @@ interval = '1m'
 bitget = ccxt.bitget({
     'apiKey': config.API_KEY,
     'secret': config.API_SECRET,
-    'password': config.API_PASSWORD,  # Required for Bitget
+    'password': config.PASSPHARSE,  # Required for Bitget
     'options': {'defaultType': 'swap'},  # Specify perpetual contracts
 })
 
