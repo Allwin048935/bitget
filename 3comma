@@ -36,31 +36,46 @@ def get_historical_data(symbol, interval='1m', limit=20):
         logger.error(f"Error fetching historical data for {symbol}: {e}")
         return pd.DataFrame()
 
-# Function to send a message to 3Commas using a webhook
+# Function to send a message to 3Commas bots using webhooks
 def send_3commas_message(symbol, action, close_price):
     timestamp = datetime.now(timezone.utc).isoformat()
-    payload = {
-        "secret": config1.SECRET_1,
-        "max_lag": "300",
-        "timestamp": timestamp,
-        "trigger_price": str(close_price),
-        "tv_exchange": "bitget",
-        "tv_instrument": symbol + '.P',
-        "action": action,
-        "bot_uuid": config1.BOT_UUID,
-    }
 
-    try:
-        url = config1.THREE_COMMAS_WEBHOOK_URL
-        response = requests.post(url, json=payload)
+    # Define payloads for both bots
+    payloads = [
+        {
+            "secret": config1.SECRET_1,
+            "max_lag": "300",
+            "timestamp": timestamp,
+            "trigger_price": str(close_price),
+            "tv_exchange": "bitget",
+            "tv_instrument": symbol + '.P',
+            "action": action,
+            "bot_uuid": config1.BOT_UUID_1,
+        },
+        {
+            "secret": config1.SECRET_2,
+            "max_lag": "300",
+            "timestamp": timestamp,
+            "trigger_price": str(close_price),
+            "tv_exchange": "bitget",
+            "tv_instrument": symbol + '.P',
+            "action": action,
+            "bot_uuid": config1.BOT_UUID_2,
+        }
+    ]
 
-        if response.status_code == 200:
-            logger.info(f"Successfully sent {action} alert for {symbol}")
-        else:
-            logger.error(f"Failed to send {action} alert for {symbol}: {response.content}")
+    # Send payloads to both bots
+    for i, payload in enumerate(payloads, 1):
+        try:
+            url = config1.THREE_COMMAS_WEBHOOK_URL
+            response = requests.post(url, json=payload)
 
-    except requests.RequestException as e:
-        logger.error(f"Error sending request for {symbol}: {e}")
+            if response.status_code == 200:
+                logger.info(f"Successfully sent {action} alert for {symbol} to bot {i}")
+            else:
+                logger.error(f"Failed to send {action} alert for {symbol} to bot {i}: {response.content}")
+        except requests.RequestException as e:
+            logger.error(f"Error sending request for {symbol} to bot {i}: {e}")
 
 # Function to handle /enter_long and /enter_short commands
 async def handle_alert(update: Update, context) -> None:
