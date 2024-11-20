@@ -24,23 +24,8 @@ except Exception as e:
     logger.error(f"Failed to initialize Bitget client: {e}")
     raise
 
-# Dictionary to store the last alert messages for each symbol
-last_alert_messages = {}
-
-# List of selected symbols from Telegram (global variable)
-selected_symbols = []
-
-# Function to fetch all available trading pairs from Bitget
-def get_available_symbols():
-    try:
-        markets = bitget.load_markets()
-        return list(markets.keys())
-    except Exception as e:
-        logger.error(f"Error fetching symbols: {e}")
-        return []
-
 # Function to get historical candlestick data
-def get_historical_data(symbol, interval, limit=20):
+def get_historical_data(symbol, interval='1m', limit=20):
     try:
         ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -53,91 +38,59 @@ def get_historical_data(symbol, interval, limit=20):
 
 # Function to send a message to 3Commas using a webhook
 def send_3commas_message(symbol, action, close_price):
-    if last_alert_messages.get(symbol) != action:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "secret": config1.SECRET_1,
-            "max_lag": "300",
-            "timestamp": timestamp,
-            "trigger_price": str(close_price),
-            "tv_exchange": "bitget",
-            "tv_instrument": symbol.replace('/', '') + '.P',
-            "action": action,
-            "bot_uuid": config1.BOT_UUID,
-        }
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "secret": config1.SECRET_1,
+        "max_lag": "300",
+        "timestamp": timestamp,
+        "trigger_price": str(close_price),
+        "tv_exchange": "bitget",
+        "tv_instrument": symbol + '.P',
+        "action": action,
+        "bot_uuid": config1.BOT_UUID,
+    }
 
-        try:
-            url = config1.THREE_COMMAS_WEBHOOK_URL
-            response = requests.post(url, json=payload)
-
-            if response.status_code == 200:
-                logger.info(f"Successfully sent alert for {symbol} with action {action}")
-                last_alert_messages[symbol] = action
-            else:
-                logger.error(f"Failed to send alert for {symbol}: {response.content}")
-
-        except requests.RequestException as e:
-            logger.error(f"Error sending request for {symbol}: {e}")
-
-# Telegram command to set symbols
-async def set_symbols(update: Update, context) -> None:
-    global selected_symbols
-    user_symbols = context.args
-
-    if user_symbols:
-        available_symbols = get_available_symbols()
-        valid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() in available_symbols]
-        invalid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() not in available_symbols]
-
-        new_symbols = [symbol for symbol in valid_symbols if symbol not in selected_symbols]
-        selected_symbols.extend(new_symbols)
-
-        response_message = ""
-        if new_symbols:
-            response_message += f"Symbols updated: {', '.join(selected_symbols)}\n"
-        if invalid_symbols:
-            response_message += f"Invalid symbols (not available): {', '.join(invalid_symbols)}"
-        if not new_symbols and not invalid_symbols:
-            response_message = "All provided symbols are already in the list."
-
-        await update.message.reply_text(response_message)
-    else:
-        await update.message.reply_text("No symbols provided. Usage: /set_symbols BTC/USDT ETH/USDT")
-
-# Telegram command to reset symbols
-async def reset_symbols(update: Update, context) -> None:
-    global selected_symbols, last_alert_messages
-    selected_symbols = []
-    last_alert_messages.clear()
-    await update.message.reply_text("Symbols and last alert messages have been reset.")
-
-# Function to handle manual long or short alerts via Telegram
-async def handle_alert(update: Update, context) -> None:
-    global selected_symbols
     try:
-        user_message = update.message.text.strip().lower()
-        command_parts = user_message.split()
+        url = config1.THREE_COMMAS_WEBHOOK_URL
+        response = requests.post(url, json=payload)
 
-        if len(command_parts) == 3:
-            _, action, symbol = command_parts
-            symbol = symbol.upper()
-
-            if symbol in selected_symbols:
-                if action in ['long', 'short']:
-                    df = get_historical_data(symbol, '1m')
-                    if not df.empty:
-                        close_price = df.iloc[-1]['close']
-                        action_key = f"enter_{action}"
-                        send_3commas_message(symbol, action_key, close_price)
-                        await update.message.reply_text(f"Alert sent: {action_key} for {symbol}")
-                    else:
-                        await update.message.reply_text(f"Could not fetch data for {symbol}.")
-                else:
-                    await update.message.reply_text("Invalid action. Use 'long' or 'short'.")
-            else:
-                await update.message.reply_text(f"Symbol {symbol} is not in the selected list. Use /set_symbols to add it.")
+        if response.status_code == 200:
+            logger.info(f"Successfully sent {action} alert for {symbol}")
         else:
-            await update.message.reply_text("Invalid format. Use: 'enter long BTC/USDT' or 'enter short ETH/USDT'")
+            logger.error(f"Failed to send {action} alert for {symbol}: {response.content}")
+
+    except requests.RequestException as e:
+        logger.error(f"Error sending request for {symbol}: {e}")
+
+# Function to handle /enter_long and /enter_short commands
+async def handle_alert(update: Update, context) -> None:
+    try:
+        user_command = update.message.text.strip().lower()
+        if user_command.startswith('/enter_long'):
+            action = "enter_long"
+        elif user_command.startswith('/enter_short'):
+            action = "enter_short"
+        else:
+            await update.message.reply_text("Invalid command. Use /enter_long or /enter_short.")
+            return
+
+        command_parts = user_command.split()
+        if len(command_parts) != 2:
+            await update.message.reply_text("Invalid format. Use: /enter_long BTCUSDT or /enter_short BTCUSDT")
+            return
+
+        symbol = command_parts[1].upper()
+        if not symbol.endswith('USDT'):
+            await update.message.reply_text("Invalid symbol. Only USDT pairs are supported.")
+            return
+
+        df = get_historical_data(symbol)
+        if not df.empty:
+            close_price = df.iloc[-1]['close']
+            send_3commas_message(symbol, action, close_price)
+            await update.message.reply_text(f"{action} alert sent for {symbol} at price {close_price}")
+        else:
+            await update.message.reply_text(f"Could not fetch data for {symbol}.")
     except Exception as e:
         logger.error(f"Error in handle_alert: {e}")
         await update.message.reply_text("An error occurred while processing your request.")
@@ -145,10 +98,9 @@ async def handle_alert(update: Update, context) -> None:
 # Start Telegram bot
 async def start_telegram_bot():
     application = Application.builder().token(config1.TELEGRAM_TOKEN).build()
-    
-    application.add_handler(CommandHandler('set_symbols', set_symbols))
-    application.add_handler(CommandHandler('reset_symbols', reset_symbols))
-    application.add_handler(CommandHandler('enter', handle_alert))  # For manual alerts
+
+    application.add_handler(CommandHandler('enter_long', handle_alert))
+    application.add_handler(CommandHandler('enter_short', handle_alert))
 
     await application.initialize()
     await application.start()
