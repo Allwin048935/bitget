@@ -15,7 +15,7 @@ interval = '1d'  # Adjust to '4h' if you need 4-hour candlesticks
 bitget = ccxt.bitget({
     'apiKey': config.API_KEY,
     'secret': config.API_SECRET,
-    'password': config.PASSPHRASE,  # Bitget requires a passphrase
+    'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
 # Dictionary to store the last alert messages for each symbol
