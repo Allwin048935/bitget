@@ -9,12 +9,12 @@ from telegram import Bot
 import config  # Import the config module
 import ta  # Import ta library
 
-interval = '12h'  # Adjust to '4h' if you need 4-hour candlesticks
+interval = '2h'  # Adjust to '4h' if you need 4-hour candlesticks
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
-    'apiKey': config.API_KEY,
-    'secret': config.API_SECRET,
+    'apiKey': config.API_KEY_RSI,
+    'secret': config.API_SECRET_RSI,
     'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
@@ -152,12 +152,12 @@ async def main():
 
                 # RSI cross events
                 if rsi_cross_over:
-                    message = f'/enter_long {symbol} - RSI crossed above 40'
+                    message = f'/enter_long {symbol}'
                     title = f'RSI Cross Over for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
                 elif rsi_cross_under:
-                    message = f'/enter_short {symbol} - RSI crossed below 60'
+                    message = f'/enter_short {symbol}'
                     title = f'RSI Cross Under for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
@@ -168,7 +168,7 @@ async def main():
         await asyncio.sleep(600)  # Sleep duration as needed
 
 # Initialize Telegram Bot
-telegram_bot = Bot(token=config.TELEGRAM_TOKEN)
+telegram_bot = Bot(token=config.TELEGRAM_TOKEN_RSI)
 
 # Use nest_asyncio for Jupyter compatibility
 nest_asyncio.apply()
