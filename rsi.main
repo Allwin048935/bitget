@@ -44,7 +44,7 @@ def calculate_macd(df):
     df['histogram'] = macd.macd_diff()
 
 # Function to calculate RSI using ta library
-def calculate_rsi(df, period=14):
+def calculate_rsi(df, period=6):
     rsi = ta.momentum.RSIIndicator(df['Close'], window=period)
     df['rsi'] = rsi.rsi()
 
