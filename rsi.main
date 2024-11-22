@@ -1,0 +1,177 @@
+import ccxt
+import pandas as pd
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+from io import BytesIO
+import asyncio
+import nest_asyncio
+from telegram import Bot
+import config  # Import the config module
+import ta  # Import ta library
+
+interval = '12h'  # Adjust to '4h' if you need 4-hour candlesticks
+
+# Initialize Bitget client
+bitget = ccxt.bitget({
+    'apiKey': config.API_KEY,
+    'secret': config.API_SECRET,
+    'password': config.API_PASSWORD,  # Bitget requires a passphrase
+})
+
+# Dictionary to store the last alert messages for each symbol
+last_alert_messages = {}
+
+# Function to get historical candlestick data
+def get_historical_data(symbol, interval, limit=50):
+    ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
+    
+    # Rename columns to match mplfinance format
+    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+    return df
+
+# Function to calculate EMA using ta library
+def calculate_ema(df, period):
+    return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
+
+# Function to calculate MACD using ta library
+def calculate_macd(df):
+    macd = ta.trend.MACD(df['Close'])
+    df['macd'] = macd.macd()
+    df['signal'] = macd.macd_signal()
+    df['histogram'] = macd.macd_diff()
+
+# Function to calculate RSI using ta library
+def calculate_rsi(df, period=14):
+    rsi = ta.momentum.RSIIndicator(df['Close'], window=period)
+    df['rsi'] = rsi.rsi()
+
+# Function to check RSI cross conditions
+def check_rsi_cross(df):
+    if 'rsi' not in df:
+        return False, False
+
+    rsi_prev = df['rsi'].iloc[-3]
+    rsi_curr = df['rsi'].iloc[-2]
+
+    cross_over = rsi_prev < 40 and rsi_curr >= 40
+    cross_under = rsi_prev > 60 and rsi_curr <= 60
+
+    return cross_over, cross_under
+
+# Function to check EMA cross
+def check_ema_cross(df, short_period=3, long_period=7):
+    df['ema_short'] = calculate_ema(df, short_period)
+    df['ema_long'] = calculate_ema(df, long_period)
+
+    cross_over = df['ema_short'].iloc[-2] > df['ema_long'].iloc[-2] and df['ema_short'].iloc[-3] <= df['ema_long'].iloc[-3]
+    cross_under = df['ema_short'].iloc[-2] < df['ema_long'].iloc[-2] and df['ema_short'].iloc[-3] >= df['ema_long'].iloc[-3]
+
+    return cross_over, cross_under
+
+# Function to plot candlesticks with EMA lines, MACD histogram, and RSI with reference lines
+def plot_candles(df, symbol, title):
+    mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
+    
+    # Create custom market colors for up and down candlesticks
+    mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
+
+    # Create a custom style using the market colors and other style settings
+    s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
+
+    # Add EMA lines, MACD Histogram, and RSI to the plot
+    short_ema = calculate_ema(df, 3)
+    long_ema = calculate_ema(df, 7)
+    calculate_macd(df)  # Calculate MACD values for plotting
+    calculate_rsi(df)  # Calculate RSI values for plotting
+
+    # Set dynamic colors for the MACD histogram
+    macd_colors = [
+        'green' if df['histogram'].iloc[i] > df['histogram'].iloc[i - 1] else 'red'
+        for i in range(1, len(df['histogram']))
+    ]
+    macd_colors.insert(0, 'gray')  # First bar has no comparison, use neutral color
+
+    # Plot figure with custom ratio and return it for further customization
+    fig, axlist = mpf.plot(
+        mpf_data,
+        figratio=(12, 8),
+        type="candle",
+        style=s,
+        tight_layout=True,
+        datetime_format='%H:%M',
+        ylabel="Price ($)",
+        addplot=[
+            mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
+            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
+            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram"),
+            mpf.make_addplot(df['rsi'], color='yellow', panel=2, ylabel="RSI"),
+            mpf.make_addplot([40] * len(df), color='green', panel=2, linestyle='--'),
+            mpf.make_addplot([60] * len(df), color='red', panel=2, linestyle='--'),
+        ],
+        returnfig=True
+    )
+
+    # Add Title
+    axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
+
+    # Save plot to a BytesIO object
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+
+    # Close the figure to avoid memory overflow
+    plt.close(fig)
+
+    return buf
+
+# Function to send Telegram message and image
+async def send_telegram_message(symbol, message, image_buffer):
+    if last_alert_messages.get(symbol) != message:
+        await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
+        await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
+        last_alert_messages[symbol] = message
+
+# Main function
+async def main():
+    while True:
+        for symbol in config.SELECTED_SYMBOLS:
+            try:
+                # Fetch historical data
+                historical_data = get_historical_data(symbol, interval)
+                
+                # Calculate technical indicators
+                calculate_macd(historical_data)
+                calculate_rsi(historical_data)
+
+                # Check RSI and EMA crossovers
+                rsi_cross_over, rsi_cross_under = check_rsi_cross(historical_data)
+                ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
+
+                # RSI cross events
+                if rsi_cross_over:
+                    message = f'/enter_long {symbol} - RSI crossed above 40'
+                    title = f'RSI Cross Over for {symbol}'
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
+                elif rsi_cross_under:
+                    message = f'/enter_short {symbol} - RSI crossed below 60'
+                    title = f'RSI Cross Under for {symbol}'
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
+
+            except Exception as e:
+                print(f"Error processing {symbol}: {e}")
+
+        await asyncio.sleep(600)  # Sleep duration as needed
+
+# Initialize Telegram Bot
+telegram_bot = Bot(token=config.TELEGRAM_TOKEN)
+
+# Use nest_asyncio for Jupyter compatibility
+nest_asyncio.apply()
+
+# Create and run the event loop
+asyncio.run(main())
