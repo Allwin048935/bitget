@@ -6,17 +6,16 @@ from io import BytesIO
 import asyncio
 import nest_asyncio
 from telegram import Bot
-import bitgetconfig  # Import the bitgetconfig module
+import config  # Import the config module
 import ta  # Import ta library
 
-interval = '15m'  # Set to '4h' for main conditions
-daily_interval = '4h'  # Use '4h' for daily amplitude ratio
+interval = '12h'  # Adjust to '4h' if you need 4-hour candlesticks
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
-    'apiKey': bitgetconfig.API_KEY,
-    'secret': bitgetconfig.API_SECRET,
-    'password': bitgetconfig.PASSPHRASE,  # Bitget requires a passphrase
+    'apiKey': config.API_KEY,
+    'secret': config.API_SECRET,
+    'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
 # Dictionary to store the last alert messages for each symbol
@@ -28,8 +27,6 @@ def get_historical_data(symbol, interval, limit=50):
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('timestamp', inplace=True)
-    
-    # Rename columns to match mplfinance format
     df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
     return df
 
@@ -44,53 +41,19 @@ def calculate_macd(df):
     df['signal'] = macd.macd_signal()
     df['histogram'] = macd.macd_diff()
 
-# Function to check MACD cross
-def check_macd_cross(df):
-    macd_curr = df['macd'].iloc[-2]
-    signal_curr = df['signal'].iloc[-2]
+# Function to check MACD and signal line crossover
+def check_macd_signal_crossover(df):
     macd_prev = df['macd'].iloc[-3]
+    macd_curr = df['macd'].iloc[-2]
     signal_prev = df['signal'].iloc[-3]
+    signal_curr = df['signal'].iloc[-2]
 
     cross_over = macd_prev <= signal_prev and macd_curr > signal_curr
     cross_under = macd_prev >= signal_prev and macd_curr < signal_curr
 
     return cross_over, cross_under
 
-# Function to check EMA cross
-def check_ema_cross(df, short_period=3, long_period=7):
-    df['ema_short'] = calculate_ema(df, short_period)
-    df['ema_long'] = calculate_ema(df, long_period)
-
-    cross_over = df['ema_short'].iloc[-2] > df['ema_long'].iloc[-2] and df['ema_short'].iloc[-3] <= df['ema_long'].iloc[-3]
-    cross_under = df['ema_short'].iloc[-2] < df['ema_long'].iloc[-2] and df['ema_short'].iloc[-3] >= df['ema_long'].iloc[-3]
-
-    return cross_over, cross_under
-
-# Function to calculate daily amplitude ratios
-def calculate_daily_amplitude_ratio(symbol):
-    try:
-        # Fetch up to 4 periods of 4-hour data to ensure sufficient rows
-        daily_data = get_historical_data(symbol, daily_interval, limit=5)
-
-        # Ensure there are enough candles to calculate ratios
-        if len(daily_data) < 3:
-            raise ValueError(f"Insufficient data for {symbol}: {len(daily_data)} rows available")
-
-        # Calculate amplitude ratios for current, previous, and third-last candles
-        current_ratio = daily_data['High'].iloc[-1] / daily_data['Low'].iloc[-1]
-        previous_ratio = daily_data['High'].iloc[-2] / daily_data['Low'].iloc[-2]
-        third_last_ratio = daily_data['High'].iloc[-3] / daily_data['Low'].iloc[-3]
-
-        return {
-            "current_ratio": current_ratio,
-            "previous_ratio": previous_ratio,
-            "third_last_ratio": third_last_ratio,
-        }
-    except Exception as e:
-        print(f"Error calculating daily amplitude ratio for {symbol}: {e}")
-        return None  # Return None if there is an error
-
-# Function to plot candlesticks with EMA lines, MACD Histogram, and MACD and signal lines
+# Function to plot candlesticks with EMA, MACD, and Signal Lines
 def plot_candles(df, symbol, title):
     mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
     mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
@@ -100,11 +63,7 @@ def plot_candles(df, symbol, title):
     long_ema = calculate_ema(df, 7)
     calculate_macd(df)
 
-    macd_colors = [
-        'green' if df['histogram'].iloc[i] > df['histogram'].iloc[i - 1] else 'red'
-        for i in range(1, len(df['histogram']))
-    ]
-    macd_colors.insert(0, 'gray')
+    macd_colors = ['green' if h > 0 else 'red' for h in df['histogram']]
 
     fig, axlist = mpf.plot(
         mpf_data,
@@ -117,14 +76,15 @@ def plot_candles(df, symbol, title):
         addplot=[
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
             mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
-            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram"),
-            mpf.make_addplot(df['macd'], color='cyan', width=1.5, panel=1, linestyle='-'),
-            mpf.make_addplot(df['signal'], color='magenta', width=1.5, panel=1, linestyle='-'),
+            mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, ylabel="MACD"),
+            mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5),
+            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1)
         ],
         returnfig=True
     )
 
     axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
+
     buf = BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
     buf.seek(0)
@@ -135,52 +95,33 @@ def plot_candles(df, symbol, title):
 # Function to send Telegram message and image
 async def send_telegram_message(symbol, message, image_buffer):
     if last_alert_messages.get(symbol) != message:
-        await telegram_bot.send_message(chat_id=bitgetconfig.CHAT_ID, text=message)
-        await telegram_bot.send_photo(chat_id=bitgetconfig.CHAT_ID, photo=image_buffer)
+        await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
+        await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
         last_alert_messages[symbol] = message
 
-# Main trading logic
+# Main function
 async def main():
     while True:
-        for symbol in bitgetconfig.SELECTED_SYMBOLS:
+        for symbol in config.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
-                calculate_macd(historical_data)  # Ensure MACD is calculated before any MACD-dependent checks
-                amplitude_ratios = calculate_daily_amplitude_ratio(symbol)
+                calculate_macd(historical_data)
+                cross_over, cross_under = check_macd_signal_crossover(historical_data)
 
-                if amplitude_ratios is None:
-                    continue
-
-                max_amplitude_ratio = max(amplitude_ratios.values())
-
-                if max_amplitude_ratio < 1.05:
-                    print(f"Skipping {symbol}: Amplitude ratios below threshold ({max_amplitude_ratio:.2f})")
-                    continue
-
-                macd_cross_over, macd_cross_under = check_macd_cross(historical_data)
-                ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
-
-                if macd_cross_over:
-                    message = f'/set_symbols {symbol}'
-                    title = f'MACD Cross Over for {symbol}'
+                if cross_over:
+                    message = f"/enter_long {symbol}"
+                    title = f"MACD Signal Line Cross Over for {symbol}"
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
-                elif macd_cross_under:
-                    message = f'/set_symbols {symbol}'
-                    title = f'MACD Cross Under for {symbol}'
+                elif cross_under:
+                    message = f"/enter_short {symbol}"
+                    title = f"MACD Signal Line Cross Under for {symbol}"
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
-
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
+        await asyncio.sleep(450)
 
-        await asyncio.sleep(300)
-
-# Initialize Telegram Bot
-telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
-
-# Use nest_asyncio for Jupyter compatibility
+telegram_bot = Bot(token=config.TELEGRAM_TOKEN_RSI)
 nest_asyncio.apply()
-
-# Run the main event loop
 asyncio.run(main())
