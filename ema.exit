@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from ta.trend import EMAIndicator  # Import EMA from the ta library
 
-interval = '2h'
+interval = '4h'
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
@@ -31,7 +31,7 @@ def get_historical_data(symbol, interval, limit=50):
     return df
 
 # Function to calculate EMA
-def calculate_ema(df, short_window=5, long_window=10):
+def calculate_ema(df, short_window=3, long_window=7):
     short_ema = EMAIndicator(close=df['close'], window=short_window)
     long_ema = EMAIndicator(close=df['close'], window=long_window)
     df['short_ema'] = short_ema.ema_indicator()
