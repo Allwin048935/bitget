@@ -6,16 +6,16 @@ from io import BytesIO
 import asyncio
 import nest_asyncio
 from telegram import Bot
-import bitgetconfig  # Import the bitgetconfig module
+import config  # Import the config module
 import ta  # Import ta library
 
 interval = '1d'  # Adjust to '4h' if you need 4-hour candlesticks
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
-    'apiKey': bitgetconfig.API_KEY,
-    'secret': bitgetconfig.API_SECRET,
-    'password': bitgetconfig.API_PASSWORD,  # Bitget requires a passphrase
+    'apiKey': config.API_KEY,
+    'secret': config.API_SECRET,
+    'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
 # Dictionary to store the last alert messages for each symbol
@@ -108,14 +108,14 @@ def plot_candles(df, symbol, title):
 # Function to send Telegram message and image
 async def send_telegram_message(symbol, message, image_buffer):
     if last_alert_messages.get(symbol) != message:
-        await telegram_bot.send_message(chat_id=bitgetconfig.CHAT_ID, text=message)
-        await telegram_bot.send_photo(chat_id=bitgetconfig.CHAT_ID, photo=image_buffer)
+        await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
+        await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
         last_alert_messages[symbol] = message
 
 # Main function
 async def main():
     while True:
-        for symbol in bitgetconfig.SELECTED_SYMBOLS:
+        for symbol in config.SELECTED_SYMBOLS:
             try:
                 # Fetch historical data
                 historical_data = get_historical_data(symbol, interval)
@@ -144,7 +144,7 @@ async def main():
         await asyncio.sleep(900)  # Sleep duration as needed
 
 # Initialize Telegram Bot
-telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
+telegram_bot = Bot(token=config.TELEGRAM_TOKEN)
 
 # Use nest_asyncio for Jupyter compatibility
 nest_asyncio.apply()
