@@ -9,13 +9,13 @@ from telegram import Bot
 import bitgetconfig  # Import the bitgetconfig module
 import ta  # Import ta library
 
-interval = '2h'  # Adjust to '4h' if you need 4-hour candlesticks
+interval = '1d'  # Adjust to '4h' if you need 4-hour candlesticks
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
     'apiKey': bitgetconfig.API_KEY,
     'secret': bitgetconfig.API_SECRET,
-    'password': bitgetconfig.PASSPHRASE,  # Bitget requires a passphrase
+    'password': bitgetconfig.API_PASSWORD,  # Bitget requires a passphrase
 })
 
 # Dictionary to store the last alert messages for each symbol
@@ -44,7 +44,7 @@ def calculate_macd(df):
     df['histogram'] = macd.macd_diff()
 
 # Function to check EMA cross
-def check_ema_cross(df, short_period=5, long_period=30):
+def check_ema_cross(df, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
 
@@ -141,7 +141,7 @@ async def main():
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(300)  # Sleep duration as needed
+        await asyncio.sleep(900)  # Sleep duration as needed
 
 # Initialize Telegram Bot
 telegram_bot = Bot(token=bitgetconfig.TELEGRAM_TOKEN)
