@@ -64,8 +64,8 @@ def plot_candles(df, symbol, title):
     s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
 
     # Add EMA lines and MACD Histogram to the plot
-    short_ema = calculate_ema(df, 5)
-    long_ema = calculate_ema(df, 30)
+    short_ema = calculate_ema(df, 3)
+    long_ema = calculate_ema(df, 7)
     calculate_macd(df)  # Calculate MACD values for plotting
 
     # Set dynamic colors for the MACD histogram based on the comparison with the previous value
