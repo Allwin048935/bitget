@@ -115,7 +115,7 @@ async def main_trading():
 
 # Start Telegram bot
 async def start_telegram_bot():
-    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    application = Application.builder().token(config.TELEGRAM_TOKEN_EXIT).build()
     
     await application.initialize()
     application.add_handler(CommandHandler('set_symbols', set_symbols))
