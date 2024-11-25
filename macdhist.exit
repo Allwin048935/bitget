@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from ta.trend import MACD  # Import MACD from the ta library
 
-interval = '1h'
+interval = '4h'
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
