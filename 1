@@ -23,6 +23,9 @@ cumulative_changes_short = {}
 total_cumulative_long = 0
 total_cumulative_short = 0
 
+# Dictionary to track the last alert message for each symbol
+last_alert_messages = {}
+
 # Function to fetch historical data
 def get_historical_data(symbol, interval, limit=50):
     ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
