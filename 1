@@ -9,23 +9,21 @@ from telegram import Bot
 import config  # Import the config module
 import ta  # Import ta library
 
-interval = '1d'  # Adjust to '4h' if needed
-
-# Initialize Bitget client
+# Interval and CCXT client setup
+interval = '1d'  # Daily candlesticks
 bitget = ccxt.bitget({
     'apiKey': config.API_KEY,
     'secret': config.API_SECRET,
     'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
-# Dictionary to store the last alert messages for each symbol
-last_alert_messages = {}
-
-# Dictionaries to store cumulative percentage changes for long and short alerts
+# Dictionaries for cumulative tracking
 cumulative_changes_long = {}
 cumulative_changes_short = {}
+total_cumulative_long = 0
+total_cumulative_short = 0
 
-# Function to get historical candlestick data
+# Function to fetch historical data
 def get_historical_data(symbol, interval, limit=50):
     ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -34,18 +32,28 @@ def get_historical_data(symbol, interval, limit=50):
     df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
     return df
 
-# Function to calculate EMA using ta library
+# Function to calculate daily percentage changes
+def calculate_daily_percentage_change(df):
+    df['daily_change'] = df['Close'].pct_change() * 100
+    return df
+
+# Function to update cumulative changes
+def update_cumulative_change(symbol, alert_type, df):
+    global total_cumulative_long, total_cumulative_short
+    daily_change = df['daily_change'].iloc[-2]
+
+    if alert_type == 'long':
+        cumulative_changes_long[symbol] = cumulative_changes_long.get(symbol, 0) + daily_change
+        total_cumulative_long += daily_change
+    elif alert_type == 'short':
+        cumulative_changes_short[symbol] = cumulative_changes_short.get(symbol, 0) + daily_change
+        total_cumulative_short += daily_change
+
+# Function to calculate EMA using the `ta` library
 def calculate_ema(df, period):
     return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
 
-# Function to calculate MACD using ta library
-def calculate_macd(df):
-    macd = ta.trend.MACD(df['Close'])
-    df['macd'] = macd.macd()
-    df['signal'] = macd.macd_signal()
-    df['histogram'] = macd.macd_diff()
-
-# Function to check EMA cross
+# Function to calculate EMA cross
 def check_ema_cross(df, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
@@ -55,29 +63,15 @@ def check_ema_cross(df, short_period=3, long_period=7):
 
     return cross_over, cross_under
 
-# Function to calculate daily percentage change
-def calculate_daily_percentage_change(df):
-    df['daily_change'] = df['Close'].pct_change() * 100
-    return df
-
-# Function to update cumulative percentage changes
-def update_cumulative_change(symbol, alert_type, df):
-    daily_change = df['daily_change'].iloc[-2]
-    if alert_type == 'long':
-        cumulative_changes_long[symbol] = cumulative_changes_long.get(symbol, 0) + daily_change
-    elif alert_type == 'short':
-        cumulative_changes_short[symbol] = cumulative_changes_short.get(symbol, 0) + daily_change
-
-# Function to plot candlesticks with EMA and MACD
+# Function to plot candlesticks with EMA lines
 def plot_candles(df, symbol, title):
     mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
     mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
     s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
+
     short_ema = calculate_ema(df, 3)
     long_ema = calculate_ema(df, 7)
-    calculate_macd(df)
-    macd_colors = ['green' if df['histogram'].iloc[i] > df['histogram'].iloc[i - 1] else 'red' for i in range(1, len(df['histogram']))]
-    macd_colors.insert(0, 'gray')
+
     fig, axlist = mpf.plot(
         mpf_data,
         figratio=(10, 6),
@@ -88,11 +82,11 @@ def plot_candles(df, symbol, title):
         ylabel="Price ($)",
         addplot=[
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
-            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
-            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, ylabel="MACD Histogram")
+            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-')
         ],
         returnfig=True
     )
+
     axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
     buf = BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
@@ -100,7 +94,7 @@ def plot_candles(df, symbol, title):
     plt.close(fig)
     return buf
 
-# Function to send Telegram message and image
+# Function to send Telegram message
 async def send_telegram_message(symbol, message, image_buffer):
     if last_alert_messages.get(symbol) != message:
         await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
@@ -109,12 +103,13 @@ async def send_telegram_message(symbol, message, image_buffer):
 
 # Main function
 async def main():
+    global total_cumulative_long, total_cumulative_short
     while True:
         for symbol in config.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
                 historical_data = calculate_daily_percentage_change(historical_data)
-                calculate_macd(historical_data)
+
                 ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
 
                 if ema_cross_over:
@@ -123,6 +118,7 @@ async def main():
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
                     update_cumulative_change(symbol, 'long', historical_data)
+
                 elif ema_cross_under:
                     message = f'/enter_short {symbol}'
                     title = f'EMA Cross Under for {symbol}'
@@ -133,9 +129,13 @@ async def main():
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
+        # Print cumulative results for monitoring
         print("Cumulative Changes (Long):", cumulative_changes_long)
         print("Cumulative Changes (Short):", cumulative_changes_short)
-        await asyncio.sleep(900)
+        print(f"Total Cumulative Long Change: {total_cumulative_long:.2f}%")
+        print(f"Total Cumulative Short Change: {total_cumulative_short:.2f}%")
+        
+        await asyncio.sleep(900)  # Sleep for 15 minutes
 
 # Initialize Telegram Bot
 telegram_bot = Bot(token=config.TELEGRAM_TOKEN)
@@ -143,5 +143,5 @@ telegram_bot = Bot(token=config.TELEGRAM_TOKEN)
 # Use nest_asyncio for Jupyter compatibility
 nest_asyncio.apply()
 
-# Run the event loop
+# Create and run the event loop
 asyncio.run(main())
