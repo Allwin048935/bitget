@@ -50,8 +50,8 @@ def check_ema_cross(df, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
 
-    cross_over = df['ema_short'].iloc[-2] > df['ema_long'].iloc[-2] and df['ema_short'].iloc[-3] <= df['ema_long'].iloc[-3]
-    cross_under = df['ema_short'].iloc[-2] < df['ema_long'].iloc[-2] and df['ema_short'].iloc[-3] >= df['ema_long'].iloc[-3]
+    cross_over = df['ema_short'].iloc[-3] > df['ema_long'].iloc[-3] and df['ema_short'].iloc[-4] <= df['ema_long'].iloc[-4]
+    cross_under = df['ema_short'].iloc[-3] < df['ema_long'].iloc[-3] and df['ema_short'].iloc[-4] >= df['ema_long'].iloc[-4]
 
     return cross_over, cross_under
 
@@ -62,7 +62,7 @@ def calculate_daily_percentage_change(df):
 
 # Function to update cumulative percentage changes
 def update_cumulative_change(symbol, alert_type, df):
-    daily_change = df['daily_change'].iloc[-1]
+    daily_change = df['daily_change'].iloc[-2]
     if alert_type == 'long':
         cumulative_changes_long[symbol] = cumulative_changes_long.get(symbol, 0) + daily_change
     elif alert_type == 'short':
