@@ -18,12 +18,8 @@ bitget = ccxt.bitget({
 })
 
 # Dictionaries for cumulative tracking and alerts
-cumulative_changes_long = {}
-cumulative_changes_short = {}
-total_cumulative_long = 0
-total_cumulative_short = 0
-last_alert_messages = {}
-last_alert_date = {}  # Track the last alert date for each symbol
+cumulative_changes = {}
+last_alert_date = {'long': {}, 'short': {}}  # Track last alert date for long and short conditions for each symbol
 
 # Function to fetch historical data
 def get_historical_data(symbol, interval, limit=50):
@@ -39,44 +35,33 @@ def calculate_daily_percentage_change(df):
     df['daily_change'] = df['Close'].pct_change() * 100
     return df
 
-# Function to calculate cumulative change since last alert
+# Function to calculate cumulative percentage change since the last alert
 def calculate_cumulative_since_last_alert(symbol, df, alert_type):
-    if symbol in last_alert_date:
-        start_date = last_alert_date[symbol]
-        subset = df[df.index >= start_date]
+    last_date = last_alert_date[alert_type].get(symbol)
+    if last_date:
+        subset = df[df.index > last_date]  # Use data after the last alert date
         if not subset.empty:
-            cumulative_change = subset['daily_change'].sum()
-            if alert_type == 'long':
-                cumulative_changes_long[symbol] = cumulative_change
-            elif alert_type == 'short':
-                cumulative_changes_short[symbol] = cumulative_change
+            return subset['daily_change'].sum()
+    return 0
 
-# Function to update cumulative changes and last alert date
-def update_cumulative_change(symbol, alert_type, df):
-    global total_cumulative_long, total_cumulative_short
-    daily_change = df['daily_change'].iloc[-3]
-
-    # Update the last alert date
-    last_alert_date[symbol] = df.index[-3]
-
-    if alert_type == 'long':
-        cumulative_changes_long[symbol] = cumulative_changes_long.get(symbol, 0) + daily_change
-        total_cumulative_long += daily_change
-    elif alert_type == 'short':
-        cumulative_changes_short[symbol] = cumulative_changes_short.get(symbol, 0) + daily_change
-        total_cumulative_short += daily_change
+# Function to update alert date and cumulative changes
+def update_alert_and_cumulative(symbol, alert_type, df):
+    last_alert_date[alert_type][symbol] = df.index[-3]  # Update last alert date
+    cumulative_change = calculate_cumulative_since_last_alert(symbol, df, alert_type)
+    cumulative_changes[symbol] = cumulative_changes.get(symbol, {})
+    cumulative_changes[symbol][alert_type] = cumulative_change
 
 # Function to calculate EMA using the `ta` library
 def calculate_ema(df, period):
     return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
 
-# Function to calculate EMA cross
+# Function to check EMA crossover
 def check_ema_cross(df, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
 
-    cross_over = df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1] #and df['ema_short'].iloc[-5] <= df['ema_long'].iloc[-5]
-    cross_under = df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1] #and df['ema_short'].iloc[-5] >= df['ema_long'].iloc[-5]
+    cross_over = df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1]
+    cross_under = df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1]
 
     return cross_over, cross_under
 
@@ -113,14 +98,11 @@ def plot_candles(df, symbol, title):
 
 # Function to send Telegram message
 async def send_telegram_message(symbol, message, image_buffer):
-    if last_alert_messages.get(symbol) != message:
-        await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
-        await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
-        last_alert_messages[symbol] = message
+    await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
+    await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
 
 # Main function
 async def main():
-    global total_cumulative_long, total_cumulative_short
     while True:
         for symbol in config.SELECTED_SYMBOLS:
             try:
@@ -130,30 +112,27 @@ async def main():
                 ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
 
                 if ema_cross_over:
-                    message = f'/enter_long {symbol}'
+                    cumulative_change = calculate_cumulative_since_last_alert(symbol, historical_data, 'long')
+                    message = f'/enter_long {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
                     title = f'EMA Cross Over for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
-                    update_cumulative_change(symbol, 'long', historical_data)
-                    calculate_cumulative_since_last_alert(symbol, historical_data, 'long')
+                    update_alert_and_cumulative(symbol, 'long', historical_data)
 
                 elif ema_cross_under:
-                    message = f'/enter_short {symbol}'
+                    cumulative_change = calculate_cumulative_since_last_alert(symbol, historical_data, 'short')
+                    message = f'/enter_short {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
                     title = f'EMA Cross Under for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
-                    update_cumulative_change(symbol, 'short', historical_data)
-                    calculate_cumulative_since_last_alert(symbol, historical_data, 'short')
+                    update_alert_and_cumulative(symbol, 'short', historical_data)
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
         # Print cumulative results for monitoring
-        print("Cumulative Changes (Long):", cumulative_changes_long)
-        print("Cumulative Changes (Short):", cumulative_changes_short)
-        print(f"Total Cumulative Long Change: {total_cumulative_long:.2f}%")
-        print(f"Total Cumulative Short Change: {total_cumulative_short:.2f}%")
-        
+        print("Cumulative Changes:", cumulative_changes)
+
         await asyncio.sleep(900)  # Sleep for 15 minutes
 
 # Initialize Telegram Bot
