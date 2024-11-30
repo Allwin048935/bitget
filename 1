@@ -1,9 +1,12 @@
 import ccxt
 import pandas as pd
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+from io import BytesIO
 import asyncio
 import nest_asyncio
 from telegram import Bot
-import config  # Import your configuration module
+import config  # Import the config module
 import ta  # Import ta library
 
 # Interval and CCXT client setup
@@ -14,9 +17,9 @@ bitget = ccxt.bitget({
     'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
-# Dictionaries for tracking EMA crossover prices and cumulative changes
+# Dictionaries for tracking crossover prices and alerts
 ema_crossover_prices = {'long': {}, 'short': {}}
-cumulative_changes = {'long': {}, 'short': {}}
+last_alert_date = {'long': {}, 'short': {}}  # Track last alert date for long and short conditions for each symbol
 
 # Function to fetch historical data
 def get_historical_data(symbol, interval, limit=50):
@@ -36,58 +39,96 @@ def check_ema_cross(df, symbol, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
 
-    cross_over = df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1] and df['ema_short'].iloc[-2] <= df['ema_long'].iloc[-2]
-    cross_under = df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1] and df['ema_short'].iloc[-2] >= df['ema_long'].iloc[-2]
+    # Initialize flags for crossovers
+    cross_over = False
+    cross_under = False
 
-    if cross_over:
-        ema_crossover_prices['long'][symbol] = df['Close'].iloc[-1]
-    elif cross_under:
-        ema_crossover_prices['short'][symbol] = df['Close'].iloc[-1]
+    # Check for crossovers in the last few candles
+    for i in range(len(df) - 1, 0, -1):  # Traverse from the most recent candle backwards
+        if not cross_over and df['ema_short'].iloc[i] > df['ema_long'].iloc[i] and df['ema_short'].iloc[i - 1] <= df['ema_long'].iloc[i - 1]:
+            cross_over = True
+            ema_crossover_prices['long'][symbol] = df['Close'].iloc[i]  # Store the crossover price
+            last_alert_date['long'][symbol] = df.index[i]  # Store the crossover date
+            break  # No need to check further
+
+        if not cross_under and df['ema_short'].iloc[i] < df['ema_long'].iloc[i] and df['ema_short'].iloc[i - 1] >= df['ema_long'].iloc[i - 1]:
+            cross_under = True
+            ema_crossover_prices['short'][symbol] = df['Close'].iloc[i]  # Store the crossover price
+            last_alert_date['short'][symbol] = df.index[i]  # Store the crossover date
+            break  # No need to check further
 
     return cross_over, cross_under
 
-# Function to calculate cumulative percentage change since EMA crossover
+# Function to calculate cumulative percentage change since the last alert
 def calculate_cumulative_percentage(symbol, alert_type, current_price):
-    if symbol in ema_crossover_prices[alert_type]:
-        crossover_price = ema_crossover_prices[alert_type][symbol]
-        cumulative_change = ((current_price - crossover_price) / crossover_price) * 100
-        cumulative_changes[alert_type][symbol] = cumulative_change
-        return cumulative_change
+    crossover_price = ema_crossover_prices[alert_type].get(symbol)
+    if crossover_price:
+        return ((current_price - crossover_price) / crossover_price) * 100
     return 0
 
-# Function to send Telegram messages in chunks
-async def send_chunked_telegram_message(chat_id, message, chunk_size=4000):
-    """Send a long message in chunks to Telegram."""
-    for i in range(0, len(message), chunk_size):
-        await telegram_bot.send_message(chat_id=chat_id, text=message[i:i+chunk_size])
+# Function to plot candlesticks with EMA lines
+def plot_candles(df, symbol, title):
+    mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
+    mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
+    s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
+
+    short_ema = calculate_ema(df, 3)
+    long_ema = calculate_ema(df, 7)
+
+    fig, axlist = mpf.plot(
+        mpf_data,
+        figratio=(10, 6),
+        type="candle",
+        style=s,
+        tight_layout=True,
+        datetime_format='%H:%M',
+        ylabel="Price ($)",
+        addplot=[
+            mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
+            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-')
+        ],
+        returnfig=True
+    )
+
+    axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+# Function to send Telegram message
+async def send_telegram_message(symbol, message, image_buffer):
+    await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
+    await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
 
 # Main function
 async def main():
     while True:
-        cumulative_results = []  # Store cumulative changes for all symbols
         for symbol in config.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
 
                 ema_cross_over, ema_cross_under = check_ema_cross(historical_data, symbol)
 
-                current_price = historical_data['Close'].iloc[-1]
-
                 if ema_cross_over:
-                    cumulative_long = calculate_cumulative_percentage(symbol, 'long', current_price)
-                    cumulative_results.append(f"{symbol} Long: {cumulative_long:.2f}%")
+                    current_price = historical_data['Close'].iloc[-1]
+                    cumulative_change = calculate_cumulative_percentage(symbol, 'long', current_price)
+                    message = f'/enter_long {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
+                    title = f'EMA Cross Over for {symbol}'
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
 
                 elif ema_cross_under:
-                    cumulative_short = calculate_cumulative_percentage(symbol, 'short', current_price)
-                    cumulative_results.append(f"{symbol} Short: {cumulative_short:.2f}%")
+                    current_price = historical_data['Close'].iloc[-1]
+                    cumulative_change = calculate_cumulative_percentage(symbol, 'short', current_price)
+                    message = f'/enter_short {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
+                    title = f'EMA Cross Under for {symbol}'
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
-
-        # Send aggregated cumulative results via Telegram in chunks
-        if cumulative_results:
-            aggregated_message = "\n".join(cumulative_results)
-            await send_chunked_telegram_message(config.CHAT_ID, f"All Symbols Cumulative Percentages:\n{aggregated_message}")
 
         await asyncio.sleep(900)  # Sleep for 15 minutes
 
