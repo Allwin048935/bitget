@@ -17,9 +17,9 @@ bitget = ccxt.bitget({
     'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
-# Dictionaries for cumulative tracking and alerts
-cumulative_changes = {}
-last_alert_date = {'long': {}, 'short': {}}  # Track last alert date for long and short conditions for each symbol
+# Dictionaries to track EMA crossover prices and alert dates
+ema_crossover_prices = {'long': {}, 'short': {}}  # Store prices at crossover
+last_alert_date = {'long': {}, 'short': {}}  # Track last alert date for each condition
 
 # Function to fetch historical data
 def get_historical_data(symbol, interval, limit=50):
@@ -30,40 +30,33 @@ def get_historical_data(symbol, interval, limit=50):
     df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
     return df
 
-# Function to calculate daily percentage changes
-def calculate_daily_percentage_change(df):
-    df['daily_change'] = df['Close'].pct_change() * 100
-    return df
-
-# Function to calculate cumulative percentage change since the last alert
-def calculate_cumulative_since_last_alert(symbol, df, alert_type):
-    last_date = last_alert_date[alert_type].get(symbol)
-    if last_date:
-        subset = df[df.index > last_date]  # Use data after the last alert date
-        if not subset.empty:
-            return subset['daily_change'].sum()
-    return 0
-
-# Function to update alert date and cumulative changes
-def update_alert_and_cumulative(symbol, alert_type, df):
-    last_alert_date[alert_type][symbol] = df.index[-3]  # Update last alert date
-    cumulative_change = calculate_cumulative_since_last_alert(symbol, df, alert_type)
-    cumulative_changes[symbol] = cumulative_changes.get(symbol, {})
-    cumulative_changes[symbol][alert_type] = cumulative_change
-
 # Function to calculate EMA using the `ta` library
 def calculate_ema(df, period):
     return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
 
-# Function to check EMA crossover
-def check_ema_cross(df, short_period=3, long_period=7):
+# Function to check EMA crossover and update prices
+def check_ema_cross(df, symbol, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
 
-    cross_over = df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1]
-    cross_under = df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1]
+    cross_over = df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1] and df['ema_short'].iloc[-2] <= df['ema_long'].iloc[-2]
+    cross_under = df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1] and df['ema_short'].iloc[-2] >= df['ema_long'].iloc[-2]
+
+    if cross_over:
+        ema_crossover_prices['long'][symbol] = df['Close'].iloc[-1]  # Update crossover price
+        last_alert_date['long'][symbol] = df.index[-1]  # Update alert date
+    elif cross_under:
+        ema_crossover_prices['short'][symbol] = df['Close'].iloc[-1]  # Update crossover price
+        last_alert_date['short'][symbol] = df.index[-1]  # Update alert date
 
     return cross_over, cross_under
+
+# Function to calculate percentage change since EMA crossover
+def calculate_cumulative_change(symbol, current_price, alert_type):
+    if symbol in ema_crossover_prices[alert_type]:
+        crossover_price = ema_crossover_prices[alert_type][symbol]
+        return ((current_price - crossover_price) / crossover_price) * 100
+    return 0
 
 # Function to plot candlesticks with EMA lines
 def plot_candles(df, symbol, title):
@@ -107,31 +100,26 @@ async def main():
         for symbol in config.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
-                historical_data = calculate_daily_percentage_change(historical_data)
-
-                ema_cross_over, ema_cross_under = check_ema_cross(historical_data)
+                ema_cross_over, ema_cross_under = check_ema_cross(historical_data, symbol)
 
                 if ema_cross_over:
-                    cumulative_change = calculate_cumulative_since_last_alert(symbol, historical_data, 'long')
-                    message = f'/enter_long {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
+                    current_price = historical_data['Close'].iloc[-1]
+                    cumulative_change = calculate_cumulative_change(symbol, current_price, 'long')
+                    message = f'/enter_long {symbol}\nCumulative Change Since EMA Cross: {cumulative_change:.2f}%'
                     title = f'EMA Cross Over for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
-                    update_alert_and_cumulative(symbol, 'long', historical_data)
 
                 elif ema_cross_under:
-                    cumulative_change = calculate_cumulative_since_last_alert(symbol, historical_data, 'short')
-                    message = f'/enter_short {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
+                    current_price = historical_data['Close'].iloc[-1]
+                    cumulative_change = calculate_cumulative_change(symbol, current_price, 'short')
+                    message = f'/enter_short {symbol}\nCumulative Change Since EMA Cross: {cumulative_change:.2f}%'
                     title = f'EMA Cross Under for {symbol}'
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
-                    update_alert_and_cumulative(symbol, 'short', historical_data)
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
-
-        # Print cumulative results for monitoring
-        print("Cumulative Changes:", cumulative_changes)
 
         await asyncio.sleep(900)  # Sleep for 15 minutes
 
