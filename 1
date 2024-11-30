@@ -98,37 +98,36 @@ def plot_candles(df, symbol, title):
     return buf
 
 # Function to send Telegram message
-async def send_telegram_message(symbol, message, image_buffer):
-    await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
-    await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
+async def send_telegram_message(chat_id, message):
+    await telegram_bot.send_message(chat_id=chat_id, text=message)
 
 # Main function
 async def main():
     while True:
+        cumulative_results = []  # Store cumulative changes for all symbols
         for symbol in config.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
 
                 ema_cross_over, ema_cross_under = check_ema_cross(historical_data, symbol)
 
+                current_price = historical_data['Close'].iloc[-1]
+
                 if ema_cross_over:
-                    current_price = historical_data['Close'].iloc[-1]
-                    cumulative_change = calculate_cumulative_percentage(symbol, 'long', current_price)
-                    message = f'/enter_long {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
-                    title = f'EMA Cross Over for {symbol}'
-                    image_buffer = plot_candles(historical_data, symbol, title)
-                    await send_telegram_message(symbol, message, image_buffer)
+                    cumulative_long = calculate_cumulative_percentage(symbol, 'long', current_price)
+                    cumulative_results.append(f"{symbol} Long: {cumulative_long:.2f}%")
 
                 elif ema_cross_under:
-                    current_price = historical_data['Close'].iloc[-1]
-                    cumulative_change = calculate_cumulative_percentage(symbol, 'short', current_price)
-                    message = f'/enter_short {symbol}\nCumulative Change Since Last Alert: {cumulative_change:.2f}%'
-                    title = f'EMA Cross Under for {symbol}'
-                    image_buffer = plot_candles(historical_data, symbol, title)
-                    await send_telegram_message(symbol, message, image_buffer)
+                    cumulative_short = calculate_cumulative_percentage(symbol, 'short', current_price)
+                    cumulative_results.append(f"{symbol} Short: {cumulative_short:.2f}%")
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
+
+        # Send aggregated cumulative results via Telegram
+        if cumulative_results:
+            aggregated_message = "\n".join(cumulative_results)
+            await send_telegram_message(config.CHAT_ID, f"All Symbols Cumulative Percentages:\n{aggregated_message}")
 
         await asyncio.sleep(900)  # Sleep for 15 minutes
 
