@@ -130,7 +130,7 @@ async def main():
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(900)  # Sleep for 15 minutes
+        await asyncio.sleep(3600)  # Sleep for 15 minutes
 
 # Initialize Telegram Bot
 telegram_bot = Bot(token=config.TELEGRAM_TOKEN)
