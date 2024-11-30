@@ -17,14 +17,13 @@ bitget = ccxt.bitget({
     'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
-# Dictionaries for cumulative tracking
+# Dictionaries for cumulative tracking and alerts
 cumulative_changes_long = {}
 cumulative_changes_short = {}
 total_cumulative_long = 0
 total_cumulative_short = 0
-
-# Dictionary to track the last alert message for each symbol
 last_alert_messages = {}
+last_alert_date = {}  # Track the last alert date for each symbol
 
 # Function to fetch historical data
 def get_historical_data(symbol, interval, limit=50):
@@ -40,10 +39,25 @@ def calculate_daily_percentage_change(df):
     df['daily_change'] = df['Close'].pct_change() * 100
     return df
 
-# Function to update cumulative changes
+# Function to calculate cumulative change since last alert
+def calculate_cumulative_since_last_alert(symbol, df, alert_type):
+    if symbol in last_alert_date:
+        start_date = last_alert_date[symbol]
+        subset = df[df.index >= start_date]
+        if not subset.empty:
+            cumulative_change = subset['daily_change'].sum()
+            if alert_type == 'long':
+                cumulative_changes_long[symbol] = cumulative_change
+            elif alert_type == 'short':
+                cumulative_changes_short[symbol] = cumulative_change
+
+# Function to update cumulative changes and last alert date
 def update_cumulative_change(symbol, alert_type, df):
     global total_cumulative_long, total_cumulative_short
     daily_change = df['daily_change'].iloc[-3]
+
+    # Update the last alert date
+    last_alert_date[symbol] = df.index[-3]
 
     if alert_type == 'long':
         cumulative_changes_long[symbol] = cumulative_changes_long.get(symbol, 0) + daily_change
@@ -61,8 +75,8 @@ def check_ema_cross(df, short_period=3, long_period=7):
     df['ema_short'] = calculate_ema(df, short_period)
     df['ema_long'] = calculate_ema(df, long_period)
 
-    cross_over = df['ema_short'].iloc[-4] > df['ema_long'].iloc[-4] and df['ema_short'].iloc[-5] <= df['ema_long'].iloc[-5]
-    cross_under = df['ema_short'].iloc[-4] < df['ema_long'].iloc[-4] and df['ema_short'].iloc[-5] >= df['ema_long'].iloc[-5]
+    cross_over = df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1] #and df['ema_short'].iloc[-5] <= df['ema_long'].iloc[-5]
+    cross_under = df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1] #and df['ema_short'].iloc[-5] >= df['ema_long'].iloc[-5]
 
     return cross_over, cross_under
 
@@ -121,6 +135,7 @@ async def main():
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
                     update_cumulative_change(symbol, 'long', historical_data)
+                    calculate_cumulative_since_last_alert(symbol, historical_data, 'long')
 
                 elif ema_cross_under:
                     message = f'/enter_short {symbol}'
@@ -128,6 +143,7 @@ async def main():
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
                     update_cumulative_change(symbol, 'short', historical_data)
+                    calculate_cumulative_since_last_alert(symbol, historical_data, 'short')
 
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
