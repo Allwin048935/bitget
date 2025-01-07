@@ -66,14 +66,19 @@ def send_telegram_message(symbol, action, close_price):
         except requests.RequestException as e:
             print(f"Error sending Telegram request for {symbol}: {e}")
 
-# Updated function to set symbols by matching against config.SELECTED_SYMBOLS
+# Updated function to set symbols dynamically
+def fetch_usdt_symbols():
+    markets = bitget.load_markets()
+    return [market for market in markets if market.endswith('/USDT')]
+
 async def set_symbols(update: Update, context) -> None:
     global selected_symbols
+    available_symbols = fetch_usdt_symbols()
     user_symbols = context.args
 
     if user_symbols:
-        valid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() in config.SELECTED_SYMBOLS]
-        invalid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() not in config.SELECTED_SYMBOLS]
+        valid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() in available_symbols]
+        invalid_symbols = [symbol.upper() for symbol in user_symbols if symbol.upper() not in available_symbols]
 
         new_symbols = [symbol for symbol in valid_symbols if symbol not in selected_symbols]
         selected_symbols.extend(new_symbols)
