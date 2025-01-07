@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from ta.trend import MACD  # Import MACD from the ta library
 
-interval = '4h'
+interval = '12h'
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
@@ -44,10 +44,10 @@ def check_histogram_conditions(df):
     short_condition = df['histogram'].iloc[-2] < df['histogram'].iloc[-3] and df['histogram'].iloc[-3] > df['histogram'].iloc[-4]
     return long_condition, short_condition
 
-# Function to send a message to Telegram
+# Function to send a message to Telegram and remove the symbol after alert
 def send_telegram_message(symbol, action, close_price):
     if last_alert_messages.get(symbol) != action:
-        message = f"{action} {symbol}" #f"Alert: {symbol} - {action}\nPrice: {close_price}"
+        message = f"{action} {symbol}"  # Constructing the alert message
         url = f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN_EXIT}/sendMessage"
         params = {"chat_id": config.TELEGRAM_CHAT_ID, "text": message}
         
@@ -56,6 +56,10 @@ def send_telegram_message(symbol, action, close_price):
             if response.status_code == 200:
                 print(f"Sent alert for {symbol} with action {action} to Telegram")
                 last_alert_messages[symbol] = action
+                # Remove the symbol from selected_symbols
+                if symbol in selected_symbols:
+                    selected_symbols.remove(symbol)
+                    print(f"Removed {symbol} from selected_symbols")
             else:
                 print(f"Failed to send Telegram alert for {symbol}: {response.content}")
 
