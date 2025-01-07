@@ -90,6 +90,14 @@ def plot_candles(df, symbol, title):
     mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
     s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
 
+    # Adjust scaling for MACD and Signal lines
+    macd_panel_config = {
+        'ylabel': "MACD",
+        'ylabel_lower': "MACD Histogram",
+        'ylim': (min(df['histogram'].min(), df['macd'].min(), df['signal'].min()) * 1.1, 
+                 max(df['histogram'].max(), df['macd'].max(), df['signal'].max()) * 1.1)
+    }
+
     # Plot candlestick chart with additional plots for EMA and MACD
     fig, axlist = mpf.plot(
         df[['Open', 'High', 'Low', 'Close']],  # Main candlestick data
@@ -102,9 +110,9 @@ def plot_candles(df, symbol, title):
         addplot=[
             mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-', ylabel="EMA"),
             mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-', ylabel="EMA"),
-            mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, ylabel="MACD"),
-            mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5),
-            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1)
+            mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, **macd_panel_config),
+            mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5, **macd_panel_config),
+            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1, **macd_panel_config)
         ],
         returnfig=True
     )
@@ -159,4 +167,3 @@ async def main():
 telegram_bot = Bot(token=config.TELEGRAM_TOKEN_RSI)
 nest_asyncio.apply()
 asyncio.run(main())
-
