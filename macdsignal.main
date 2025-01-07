@@ -6,8 +6,9 @@ from io import BytesIO
 import asyncio
 import nest_asyncio
 from telegram import Bot
-import config  # Import the config module
+import requests  # For fetching USDT pairs
 import ta  # Import ta library
+import config  # Import the config module
 
 interval = '1h'  # Adjust to '4h' if you need 4-hour candlesticks
 
@@ -18,8 +19,30 @@ bitget = ccxt.bitget({
     'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
-# Dictionary to store the last alert messages for each symbol
-last_alert_messages = {}
+# Function to fetch USDT trading pairs dynamically
+def get_usdt_pairs():
+    url = "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Check for HTTP errors
+        
+        data = response.json()
+
+        # Ensure 'data' is present and is a list
+        if 'data' in data and isinstance(data['data'], list):
+            # Filter for USDT trading pairs
+            usdt_pairs = [item['symbol'] for item in data['data'] if 'USDT' in item['symbol']]
+            return usdt_pairs
+        else:
+            print("Unexpected data format.")
+            return []
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return []
+    except ValueError as e:
+        print(f"Error parsing JSON: {e}")
+        return []
 
 # Function to get historical candlestick data
 def get_historical_data(symbol, interval, limit=50):
@@ -55,18 +78,21 @@ def check_macd_signal_crossover(df):
 
 # Function to plot candlesticks with EMA, MACD, and Signal Lines
 def plot_candles(df, symbol, title):
-    mpf_data = df[['Open', 'High', 'Low', 'Close']].copy()
-    mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
-    s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
-
+    # Calculate indicators
     short_ema = calculate_ema(df, 3)
     long_ema = calculate_ema(df, 7)
     calculate_macd(df)
 
+    # Prepare colors for MACD histogram
     macd_colors = ['green' if h > 0 else 'red' for h in df['histogram']]
 
+    # Prepare market colors and style for candlestick chart
+    mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
+    s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
+
+    # Plot candlestick chart with additional plots for EMA and MACD
     fig, axlist = mpf.plot(
-        mpf_data,
+        df[['Open', 'High', 'Low', 'Close']],  # Main candlestick data
         figratio=(10, 6),
         type="candle",
         style=s,
@@ -74,8 +100,8 @@ def plot_candles(df, symbol, title):
         datetime_format='%H:%M',
         ylabel="Price ($)",
         addplot=[
-            mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-'),
-            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-'),
+            mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-', ylabel="EMA"),
+            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-', ylabel="EMA"),
             mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, ylabel="MACD"),
             mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5),
             mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1)
@@ -83,8 +109,10 @@ def plot_candles(df, symbol, title):
         returnfig=True
     )
 
+    # Set the title of the plot
     axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
 
+    # Save plot to a buffer
     buf = BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
     buf.seek(0)
@@ -99,8 +127,14 @@ async def send_telegram_message(symbol, message, image_buffer):
         await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
         last_alert_messages[symbol] = message
 
+# Dictionary to store the last alert messages for each symbol
+last_alert_messages = {}
+
 # Main function
 async def main():
+    usdt_pairs = get_usdt_pairs()  # Fetch USDT pairs dynamically
+    config.SELECTED_SYMBOLS = usdt_pairs  # Update config.SELECTED_SYMBOLS with fetched pairs
+
     while True:
         for symbol in config.SELECTED_SYMBOLS:
             try:
@@ -125,3 +159,4 @@ async def main():
 telegram_bot = Bot(token=config.TELEGRAM_TOKEN_RSI)
 nest_asyncio.apply()
 asyncio.run(main())
+
