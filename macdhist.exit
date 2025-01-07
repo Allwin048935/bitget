@@ -69,7 +69,7 @@ def send_telegram_message(symbol, action, close_price):
 # Updated function to set symbols dynamically
 def fetch_usdt_symbols():
     markets = bitget.load_markets()
-    return [market for market in markets if market.endswith('/USDT')]
+    return [market.replace('/', '') for market in markets if market.endswith('/USDT')]
 
 async def set_symbols(update: Update, context) -> None:
     global selected_symbols
@@ -93,7 +93,7 @@ async def set_symbols(update: Update, context) -> None:
 
         await update.message.reply_text(response_message)
     else:
-        await update.message.reply_text("No symbols provided. Usage: /set_symbols BTC/USDT ETH/USDT")
+        await update.message.reply_text("No symbols provided. Usage: /set_symbols BTCUSDT ETHUSDT")
 
 # Command to reset symbols and last alert messages
 async def reset_symbols(update: Update, context) -> None:
