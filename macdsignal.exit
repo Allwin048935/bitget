@@ -8,12 +8,13 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from ta.trend import MACD  # Import MACD from the ta library
 
-interval = '4h'
+interval = '12h'
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
     'apiKey': config.API_KEY,
     'secret': config.API_SECRET,
+    'password': config.API_PASSWORD,  # Bitget requires a passphrase
 })
 
 # Dictionary to store the last alert messages for each symbol
@@ -21,6 +22,31 @@ last_alert_messages = {}
 
 # List of selected symbols from Telegram (global variable)
 selected_symbols = []
+
+# Function to fetch USDT trading pairs dynamically
+def get_usdt_pairs():
+    url = "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Check for HTTP errors
+        
+        data = response.json()
+
+        # Ensure 'data' is present and is a list
+        if 'data' in data and isinstance(data['data'], list):
+            # Filter for USDT trading pairs
+            usdt_pairs = [item['symbol'] for item in data['data'] if 'USDT' in item['symbol']]
+            return usdt_pairs
+        else:
+            print("Unexpected data format.")
+            return []
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return []
+    except ValueError as e:
+        print(f"Error parsing JSON: {e}")
+        return []
 
 # Function to get historical candlestick data
 def get_historical_data(symbol, interval, limit=50):
@@ -110,7 +136,7 @@ async def main_trading():
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)
 
 # Start Telegram bot
 async def start_telegram_bot():
