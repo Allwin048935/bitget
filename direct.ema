@@ -1,12 +1,13 @@
 import ccxt
 import pandas as pd
 import time
-from config import BITGET_API_KEY, BITGET_API_SECRET, symbols, time_interval
+from config import BITGET_API_KEY, BITGET_API_SECRET, BITGET_API_PASSWORD, symbols, time_interval
 
 # Create a Bitget Futures client
 exchange = ccxt.bitget({
     'apiKey': BITGET_API_KEY,
     'secret': BITGET_API_SECRET,
+    'password': BITGET_API_PASSWORD,
     'enableRateLimit': True,
     'options': {
         'defaultType': 'swap',  # Bitget uses 'swap' for perpetual futures
