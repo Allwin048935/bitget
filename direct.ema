@@ -43,16 +43,27 @@ def fetch_ohlcv(symbol, timeframe, limit):
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
+# Function to fetch minimum order quantity for a symbol
+def get_min_order_size(symbol):
+    try:
+        market_info = exchange.markets.get(symbol, {})
+        return market_info.get('limits', {}).get('amount', {}).get('min', 0.001)  # Default to 0.001 if not found
+    except Exception as e:
+        print(f"Error fetching minimum order size for {symbol}: {e}")
+        return 0.001
+
 # Function to place a market buy order
 def place_market_buy_order(symbol, quantity):
     try:
-        order = exchange.create_market_buy_order(
+        min_order_size = get_min_order_size(symbol)
+        quantity = max(quantity, min_order_size)  # Ensure quantity is above minimum
+
+        order = exchange.create_order(
             symbol=symbol,
+            type='market',
+            side='buy',
             amount=quantity,
-            params={
-                'side': 'open_long',  # Bitget specific parameter for opening long position
-                'orderType': 'market'
-            }
+            params={'marginMode': 'isolated'}
         )
         print(f"Market Buy Order placed for {symbol}: {order}")
         return order
@@ -62,13 +73,15 @@ def place_market_buy_order(symbol, quantity):
 # Function to place a market sell order
 def place_market_sell_order(symbol, quantity):
     try:
-        order = exchange.create_market_sell_order(
+        min_order_size = get_min_order_size(symbol)
+        quantity = max(quantity, min_order_size)  # Ensure quantity is above minimum
+
+        order = exchange.create_order(
             symbol=symbol,
+            type='market',
+            side='sell',
             amount=quantity,
-            params={
-                'side': 'open_short',  # Bitget specific parameter for opening short position
-                'orderType': 'market'
-            }
+            params={'marginMode': 'isolated'}
         )
         print(f"Market Sell Order placed for {symbol}: {order}")
         return order
@@ -78,101 +91,87 @@ def place_market_sell_order(symbol, quantity):
 # Function to close open positions
 def close_open_position(symbol):
     try:
-        if open_orders[symbol]:
-            position = exchange.fetch_position(symbol)
-            if position['side'] == 'long':
-                order = exchange.create_market_sell_order(
-                    symbol,
-                    position['positionAmt'],
-                    params={'side': 'close_long'}
-                )
-                print(f"Closing long position for {symbol}: {order}")
-            elif position['side'] == 'short':
-                order = exchange.create_market_buy_order(
-                    symbol,
-                    position['positionAmt'],
-                    params={'side': 'close_short'}
-                )
-                print(f"Closing short position for {symbol}: {order}")
+        position = exchange.fetch_position(symbol)
+        if position and 'size' in position and float(position['size']) > 0:
+            side = 'sell' if position['side'] == 'long' else 'buy'
+            order = exchange.create_order(
+                symbol,
+                type='market',
+                side=side,
+                amount=position['size'],
+                params={'marginMode': 'isolated'}
+            )
+            print(f"Closed {position['side']} position for {symbol}: {order}")
     except Exception as e:
         print(f"Error closing open position for {symbol}: {e}")
 
-# Function to close open orders
+# Function to cancel open orders
 def close_open_orders(symbol):
     try:
-        if open_orders[symbol]:
-            exchange.cancel_order(open_orders[symbol]['id'], symbol=symbol)
-            print(f"Cancelled open order for {symbol}: {open_orders[symbol]['id']}")
+        orders = exchange.fetch_open_orders(symbol)
+        for order in orders:
+            exchange.cancel_order(order['id'], symbol)
+            print(f"Cancelled order {order['id']} for {symbol}")
     except Exception as e:
-        print(f"Error cancelling open order for {symbol}: {e}")
+        print(f"Error cancelling open orders for {symbol}: {e}")
 
 # Main trading function for futures
 def ema_strategy():
     while True:
         try:
             for symbol in symbols:
-                # Fetch historical data for each symbol
-                historical_data = fetch_ohlcv(symbol, time_interval, 100)
-                df = historical_data  # Added this line to fix the undefined 'df' in trading decisions
+                formatted_symbol = f"{symbol}:USDT"  # Ensure Bitget symbol format
 
-                # Check if there's enough data for EMA calculation
+                # Fetch historical data
+                historical_data = fetch_ohlcv(formatted_symbol, time_interval, 100)
+                df = historical_data  # Fix undefined 'df'
+
                 if len(historical_data) < long_ema_period:
                     print(f"Not enough data for {symbol}. Waiting for more data...")
                     continue
 
-                # Fetch the latest candlestick for each symbol
-                latest_candle = exchange.fetch_ticker(symbol)
+                # Fetch latest close price
+                latest_candle = exchange.fetch_ticker(formatted_symbol)
+                latest_close = float(latest_candle.get('close', 0))
 
-                if 'close' not in latest_candle:
-                    print(f"Error: 'close' not found in the latest_candle for {symbol}")
+                if latest_close <= 0:
+                    print(f"Invalid latest_close value for {symbol}")
                     continue
 
-                latest_close = float(latest_candle['close'])
-
-                # Check if latest_close is None
-                if latest_close is None:
-                    print(f"Error: latest_close is None for {symbol}")
-                    continue
-
-                # Calculate the quantity based on the fixed USDT value
+                # Calculate order quantity
                 quantity = fixed_quantity_usdt / latest_close
 
                 print(f"Symbol: {symbol}, Latest Close: {latest_close}, Quantity: {quantity}")
 
-                # Close open positions and orders at the end of the time interval
-                close_open_position(symbol)
-                close_open_orders(symbol)
+                # Close open positions and orders before placing a new one
+                close_open_position(formatted_symbol)
+                close_open_orders(formatted_symbol)
 
-                # Make trading decisions for each symbol
-                latest_short_ema = df['short_ema'].iloc[-1]  # Get the latest EMA values
+                # Get latest EMA values
+                latest_short_ema = df['short_ema'].iloc[-1]
                 latest_long_ema = df['long_ema'].iloc[-1]
 
-                if (
-                    latest_short_ema > latest_long_ema and
-                    last_order_types[symbol] != 'BUY'
-                ):
+                # Trading conditions
+                if latest_short_ema > latest_long_ema and last_order_types[symbol] != 'BUY':
                     print(f'{symbol} Buy Signal (Crossover)')
-                    close_open_position(symbol)
-                    close_open_orders(symbol)
-                    open_orders[symbol] = place_market_buy_order(symbol, quantity)
+                    close_open_position(formatted_symbol)
+                    close_open_orders(formatted_symbol)
+                    open_orders[symbol] = place_market_buy_order(formatted_symbol, quantity)
                     last_order_types[symbol] = 'BUY'
 
-                elif (
-                    latest_short_ema < latest_long_ema and
-                    last_order_types[symbol] != 'SELL'
-                ):
+                elif latest_short_ema < latest_long_ema and last_order_types[symbol] != 'SELL':
                     print(f'{symbol} Sell Signal (Crossunder)')
-                    close_open_position(symbol)
-                    close_open_orders(symbol)
-                    open_orders[symbol] = place_market_sell_order(symbol, quantity)
+                    close_open_position(formatted_symbol)
+                    close_open_orders(formatted_symbol)
+                    open_orders[symbol] = place_market_sell_order(formatted_symbol, quantity)
                     last_order_types[symbol] = 'SELL'
 
-            # Sleep for some time (e.g., 5 minutes) before checking again
+            # Sleep for 5 minutes before checking again
             time.sleep(300)
 
         except Exception as e:
             print(f'An error occurred: {e}')
-            time.sleep(60)  # Wait for a minute before trying again
+            time.sleep(60)  # Wait before retrying
 
 # Run the trading strategy
 if __name__ == "__main__":
