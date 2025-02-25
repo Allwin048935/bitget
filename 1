@@ -26,6 +26,22 @@ open_orders = {symbol: None for symbol in symbols}
 # Fixed quantity in USDT worth of contracts
 fixed_quantity_usdt = 6
 
+# Function to fetch position mode (Bitget-specific raw API call)
+def get_position_mode(symbol):
+    try:
+        # Raw API call to get position mode (endpoint: /api/v2/mix/position/all-position-v2)
+        response = exchange.private_mix_get_v2_mix_position_all_position_v2({
+            'productType': 'USDT-FUTURES',  # Adjust if needed
+            'marginCoin': 'USDT'
+        })
+        for pos in response['data']:
+            if pos['symbol'] == symbol:
+                return 'one-way' if pos['holdMode'] == 'single_hold' else 'hedge'
+        return 'one-way'  # Default assumption if no position found
+    except Exception as e:
+        print(f"Error fetching position mode: {e}")
+        return 'one-way'  # Fallback
+
 # Function to fetch historical data for futures with EMA calculation
 def fetch_ohlcv(symbol, timeframe, limit):
     try:
@@ -44,7 +60,7 @@ def fetch_ohlcv(symbol, timeframe, limit):
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to place a market buy order (No preemptive closing)
+# Function to place a market buy order
 def place_market_buy_order(symbol, quantity):
     try:
         order = exchange.create_market_buy_order(
@@ -61,9 +77,13 @@ def place_market_buy_order(symbol, quantity):
         print(f"Error placing Market Buy Order for {symbol}: {e}")
         return None
 
-# Function to place a market sell order (No preemptive closing)
+# Function to place a market sell order
 def place_market_sell_order(symbol, quantity):
     try:
+        # Log position mode for debugging
+        mode = get_position_mode(symbol)
+        print(f"Position mode for {symbol}: {mode}")
+
         order = exchange.create_market_sell_order(
             symbol=symbol,
             amount=quantity,
@@ -124,6 +144,9 @@ def close_open_orders(symbol):
 
 # Main trading function for futures
 def ema_strategy():
+    exchange.load_markets()
+    print("Available markets:", [s for s in exchange.markets.keys() if 'MOG' in s])
+
     while True:
         try:
             for symbol in symbols:
@@ -146,7 +169,7 @@ def ema_strategy():
 
                 if latest_short_ema > latest_long_ema and last_order_types[symbol] != 'BUY':
                     print(f'{symbol} Buy Signal (Crossover)')
-                    close_open_position(symbol)  # Still close explicitly here for control
+                    close_open_position(symbol)
                     close_open_orders(symbol)
                     open_orders[symbol] = place_market_buy_order(symbol, quantity)
                     if open_orders[symbol]:
@@ -154,7 +177,7 @@ def ema_strategy():
 
                 elif latest_short_ema < latest_long_ema and last_order_types[symbol] != 'SELL':
                     print(f'{symbol} Sell Signal (Crossunder)')
-                    close_open_position(symbol)  # Still close explicitly here for control
+                    close_open_position(symbol)
                     close_open_orders(symbol)
                     open_orders[symbol] = place_market_sell_order(symbol, quantity)
                     if open_orders[symbol]:
@@ -167,6 +190,4 @@ def ema_strategy():
 
 # Run the trading strategy
 if __name__ == "__main__":
-    exchange.load_markets()
-    print("Available markets:", [s for s in exchange.markets.keys() if 'AERGO' in s])
     ema_strategy()
