@@ -11,6 +11,7 @@ bitget = ccxt.bitget({
     "options": {"defaultType": "swap"},  # Ensure you're using the correct type
 })
 
+
 def place_market_order(symbol, side, quantity):
     """Places a market order on Bitget considering the correct position mode."""
     try:
@@ -44,3 +45,4 @@ quantity = 10  # Adjust based on your available balance and margin
 
 # Place a new market order
 place_market_order(symbol, side, quantity)
+
