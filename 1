@@ -19,7 +19,7 @@ exchange = ccxt.bitget({
 short_ema_period = 5
 long_ema_period = 10
 
-# Track the last order type placed and open positions for each symbol
+# Track the last order type placed and open orders for each symbol
 last_order_types = {symbol: None for symbol in symbols}
 open_orders = {symbol: None for symbol in symbols}
 
@@ -61,49 +61,60 @@ def place_market_buy_order(symbol, quantity):
         print(f"Error placing Market Buy Order for {symbol}: {e}")
         return None
 
-# Function to place a market sell order (Updated to handle side mismatch)
+# Function to place a market sell order (Enhanced to handle side mismatch)
 def place_market_sell_order(symbol, quantity):
     try:
-        # Check current position
+        # Fetch and log current position
         position = exchange.fetch_position(symbol)
-        if position and position['side'] == 'long' and float(position['positionAmt']) > 0:
-            close_open_position(symbol)  # Close any existing long position first
+        print(f"Current position for {symbol}: {position}")
 
-        # Place sell order to open short
-        order = exchange.create_market_sell_order(
-            symbol=symbol,
-            amount=quantity,
-            params={
-                'side': 'open_short',  # Open short position
-                'orderType': 'market'
-            }
-        )
-        print(f"Market Sell Order placed for {symbol}: {order}")
-        return order
+        # Check if there's an existing long position
+        if position and position['side'] == 'long' and float(position['positionAmt']) > 0:
+            print(f"Closing existing long position for {symbol} before opening short")
+            close_open_position(symbol)
+            # Re-fetch position to ensure it's closed
+            position = exchange.fetch_position(symbol)
+            print(f"Position after closing: {position}")
+
+        # Ensure no position exists or it's zero before opening short
+        if position and float(position['positionAmt']) == 0 or not position:
+            order = exchange.create_market_sell_order(
+                symbol=symbol,
+                amount=quantity,
+                params={
+                    'side': 'open_short',  # Open short position
+                    'orderType': 'market'
+                }
+            )
+            print(f"Market Sell Order placed for {symbol}: {order}")
+            return order
+        else:
+            print(f"Cannot place sell order for {symbol}: Unexpected position state: {position}")
+            return None
     except Exception as e:
         print(f"Error placing Market Sell Order for {symbol}: {e}")
         return None
 
-# Function to close open positions
+# Function to close open positions (Enhanced for reliability)
 def close_open_position(symbol):
     try:
-        if open_orders[symbol]:
-            position = exchange.fetch_position(symbol)
-            if position and position['side'] == 'long' and float(position['positionAmt']) > 0:
-                order = exchange.create_market_sell_order(
-                    symbol,
-                    position['positionAmt'],
-                    params={'side': 'close_long', 'orderType': 'market'}
-                )
-                print(f"Closing long position for {symbol}: {order}")
-            elif position and position['side'] == 'short' and float(position['positionAmt']) > 0:
-                order = exchange.create_market_buy_order(
-                    symbol,
-                    position['positionAmt'],
-                    params={'side': 'close_short', 'orderType': 'market'}
-                )
-                print(f"Closing short position for {symbol}: {order}")
-            open_orders[symbol] = None  # Clear open order tracking after closing
+        position = exchange.fetch_position(symbol)
+        print(f"Attempting to close position for {symbol}: {position}")
+        if position and position['side'] == 'long' and float(position['positionAmt']) > 0:
+            order = exchange.create_market_sell_order(
+                symbol,
+                position['positionAmt'],
+                params={'side': 'close_long', 'orderType': 'market'}
+            )
+            print(f"Closing long position for {symbol}: {order}")
+        elif position and position['side'] == 'short' and float(position['positionAmt']) > 0:
+            order = exchange.create_market_buy_order(
+                symbol,
+                position['positionAmt'],
+                params={'side': 'close_short', 'orderType': 'market'}
+            )
+            print(f"Closing short position for {symbol}: {order}")
+        open_orders[symbol] = None  # Clear tracking
     except Exception as e:
         print(f"Error closing open position for {symbol}: {e}")
 
@@ -136,7 +147,6 @@ def ema_strategy():
 
                 latest_close = float(latest_candle['close'])
                 quantity = fixed_quantity_usdt / latest_close
-
                 print(f"Symbol: {symbol}, Latest Close: {latest_close}, Quantity: {quantity}")
 
                 # Get latest EMA values
