@@ -44,14 +44,14 @@ def fetch_ohlcv(symbol, timeframe, limit):
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to place a market buy order
+# Function to place a market buy order (No preemptive closing)
 def place_market_buy_order(symbol, quantity):
     try:
         order = exchange.create_market_buy_order(
             symbol=symbol,
             amount=quantity,
             params={
-                'side': 'buy',  # One-way mode: buy to open long
+                'side': 'buy',  # One-way mode: buy to open long or close short
                 'orderType': 'market'
             }
         )
@@ -61,43 +61,24 @@ def place_market_buy_order(symbol, quantity):
         print(f"Error placing Market Buy Order for {symbol}: {e}")
         return None
 
-# Function to place a market sell order (Updated to handle missing positionAmt)
+# Function to place a market sell order (No preemptive closing)
 def place_market_sell_order(symbol, quantity):
     try:
-        position = exchange.fetch_position(symbol)
-        print(f"Current position for {symbol}: {position}")
-
-        # Check if there's an existing long position
-        position_size = float(position.get('positionAmt', 0)) if position else 0
-        position_side = position.get('side') if position else None
-
-        if position_side == 'long' and position_size > 0:
-            print(f"Closing existing long position for {symbol} before opening short")
-            close_open_position(symbol)
-            position = exchange.fetch_position(symbol)
-            print(f"Position after closing: {position}")
-            position_size = float(position.get('positionAmt', 0)) if position else 0
-
-        # Open short position if no position exists or size is zero
-        if position_size == 0:
-            order = exchange.create_market_sell_order(
-                symbol=symbol,
-                amount=quantity,
-                params={
-                    'side': 'sell',  # One-way mode: sell to open short
-                    'orderType': 'market'
-                }
-            )
-            print(f"Market Sell Order placed for {symbol}: {order}")
-            return order
-        else:
-            print(f"Cannot place sell order for {symbol}: Unexpected position size: {position_size}")
-            return None
+        order = exchange.create_market_sell_order(
+            symbol=symbol,
+            amount=quantity,
+            params={
+                'side': 'sell',  # One-way mode: sell to open short or close long
+                'orderType': 'market'
+            }
+        )
+        print(f"Market Sell Order placed for {symbol}: {order}")
+        return order
     except Exception as e:
         print(f"Error placing Market Sell Order for {symbol}: {e}")
         return None
 
-# Function to close open positions (Updated to handle missing positionAmt)
+# Function to close open positions (Kept for explicit use)
 def close_open_position(symbol):
     try:
         position = exchange.fetch_position(symbol)
@@ -165,7 +146,7 @@ def ema_strategy():
 
                 if latest_short_ema > latest_long_ema and last_order_types[symbol] != 'BUY':
                     print(f'{symbol} Buy Signal (Crossover)')
-                    close_open_position(symbol)
+                    close_open_position(symbol)  # Still close explicitly here for control
                     close_open_orders(symbol)
                     open_orders[symbol] = place_market_buy_order(symbol, quantity)
                     if open_orders[symbol]:
@@ -173,7 +154,7 @@ def ema_strategy():
 
                 elif latest_short_ema < latest_long_ema and last_order_types[symbol] != 'SELL':
                     print(f'{symbol} Sell Signal (Crossunder)')
-                    close_open_position(symbol)
+                    close_open_position(symbol)  # Still close explicitly here for control
                     close_open_orders(symbol)
                     open_orders[symbol] = place_market_sell_order(symbol, quantity)
                     if open_orders[symbol]:
@@ -187,6 +168,5 @@ def ema_strategy():
 # Run the trading strategy
 if __name__ == "__main__":
     exchange.load_markets()
-    # Verify available symbols (for debugging)
     print("Available markets:", [s for s in exchange.markets.keys() if 'AERGO' in s])
     ema_strategy()
