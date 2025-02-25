@@ -26,16 +26,6 @@ open_orders = {symbol: None for symbol in symbols}
 # Fixed quantity in USDT worth of contracts
 fixed_quantity_usdt = 6
 
-# Function to check position mode (for debugging)
-def get_position_mode():
-    try:
-        # Bitget doesn't have a direct CCXT method for this; use raw API if needed
-        # For now, assume one-way mode unless confirmed otherwise
-        return "one-way"  # Placeholder; replace with actual API call if available
-    except Exception as e:
-        print(f"Error checking position mode: {e}")
-        return "one-way"
-
 # Function to fetch historical data for futures with EMA calculation
 def fetch_ohlcv(symbol, timeframe, limit):
     try:
@@ -54,7 +44,7 @@ def fetch_ohlcv(symbol, timeframe, limit):
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to place a market buy order (Updated for one-way mode)
+# Function to place a market buy order
 def place_market_buy_order(symbol, quantity):
     try:
         order = exchange.create_market_buy_order(
@@ -71,21 +61,25 @@ def place_market_buy_order(symbol, quantity):
         print(f"Error placing Market Buy Order for {symbol}: {e}")
         return None
 
-# Function to place a market sell order (Updated for one-way mode)
+# Function to place a market sell order (Updated to handle missing positionAmt)
 def place_market_sell_order(symbol, quantity):
     try:
         position = exchange.fetch_position(symbol)
         print(f"Current position for {symbol}: {position}")
 
-        # In one-way mode, close any existing position first
-        if position and position['side'] == 'long' and float(position['positionAmt']) > 0:
+        # Check if there's an existing long position
+        position_size = float(position.get('positionAmt', 0)) if position else 0
+        position_side = position.get('side') if position else None
+
+        if position_side == 'long' and position_size > 0:
             print(f"Closing existing long position for {symbol} before opening short")
             close_open_position(symbol)
             position = exchange.fetch_position(symbol)
             print(f"Position after closing: {position}")
+            position_size = float(position.get('positionAmt', 0)) if position else 0
 
-        # Open short position
-        if position and float(position['positionAmt']) == 0 or not position:
+        # Open short position if no position exists or size is zero
+        if position_size == 0:
             order = exchange.create_market_sell_order(
                 symbol=symbol,
                 amount=quantity,
@@ -97,40 +91,43 @@ def place_market_sell_order(symbol, quantity):
             print(f"Market Sell Order placed for {symbol}: {order}")
             return order
         else:
-            print(f"Cannot place sell order for {symbol}: Unexpected position state: {position}")
+            print(f"Cannot place sell order for {symbol}: Unexpected position size: {position_size}")
             return None
     except Exception as e:
         print(f"Error placing Market Sell Order for {symbol}: {e}")
         return None
 
-# Function to close open positions (Updated for one-way mode)
+# Function to close open positions (Updated to handle missing positionAmt)
 def close_open_position(symbol):
     try:
         position = exchange.fetch_position(symbol)
         print(f"Attempting to close position for {symbol}: {position}")
-        if position and position['side'] == 'long' and float(position['positionAmt']) > 0:
+        position_size = float(position.get('positionAmt', 0)) if position else 0
+        position_side = position.get('side') if position else None
+
+        if position_side == 'long' and position_size > 0:
             order = exchange.create_market_sell_order(
                 symbol,
-                position['positionAmt'],
+                position_size,
                 params={
                     'side': 'sell',  # One-way mode: sell to close long
                     'orderType': 'market',
-                    'reduceOnly': 'YES'  # Ensure it only reduces position
+                    'reduceOnly': 'YES'
                 }
             )
             print(f"Closing long position for {symbol}: {order}")
-        elif position and position['side'] == 'short' and float(position['positionAmt']) > 0:
+        elif position_side == 'short' and position_size > 0:
             order = exchange.create_market_buy_order(
                 symbol,
-                position['positionAmt'],
+                position_size,
                 params={
                     'side': 'buy',  # One-way mode: buy to close short
                     'orderType': 'market',
-                    'reduceOnly': 'YES'  # Ensure it only reduces position
+                    'reduceOnly': 'YES'
                 }
             )
             print(f"Closing short position for {symbol}: {order}")
-        open_orders[symbol] = None  # Clear tracking
+        open_orders[symbol] = None
     except Exception as e:
         print(f"Error closing open position for {symbol}: {e}")
 
@@ -146,10 +143,6 @@ def close_open_orders(symbol):
 
 # Main trading function for futures
 def ema_strategy():
-    # Log position mode at start
-    position_mode = get_position_mode()
-    print(f"Operating in position mode: {position_mode}")
-
     while True:
         try:
             for symbol in symbols:
@@ -194,4 +187,6 @@ def ema_strategy():
 # Run the trading strategy
 if __name__ == "__main__":
     exchange.load_markets()
+    # Verify available symbols (for debugging)
+    print("Available markets:", [s for s in exchange.markets.keys() if 'AERGO' in s])
     ema_strategy()
