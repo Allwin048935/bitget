@@ -11,39 +11,10 @@ bitget = ccxt.bitget({
     "options": {"defaultType": "swap"},  # Ensure you're using the correct type
 })
 
-def fetch_position(symbol):
-    """Fetch open position for a given symbol."""
-    try:
-        positions = bitget.fetch_positions([symbol])
-        if positions and len(positions) > 0:
-            position = positions[0]  # Get first entry
-            print(f"Fetched Position Data for {symbol}: {position}")
-            return position
-        else:
-            print(f"No open position found for {symbol}.")
-            return None
-    except Exception as e:
-        print(f"Error fetching position for {symbol}: {e}")
-        return None
-
-def close_open_position(symbol):
-    """Closes an open position for the given symbol if it exists."""
-    position = fetch_position(symbol)
-
-    if position and position.get("contracts", 0) > 0:
-        side = "sell" if position["side"] == "long" else "buy"
-        quantity = position["contracts"]
-
-        print(f"Attempting to close {side.upper()} position for {symbol} with {quantity} contracts.")
-        response = place_market_order(symbol, side, quantity)
-        print(f"Close Position Response: {response}")
-    else:
-        print(f"No open position to close for {symbol}.")
-
 def place_market_order(symbol, side, quantity):
     """Places a market order on Bitget."""
     try:
-        bitget_symbol = symbol.replace("/", "")  # Convert AR/USDT to ARUSDT
+        bitget_symbol = symbol.replace("/", "").replace(":USDT", "")  # Convert AR/USDT:USDT to ARUSDT
         order_data = {
             "symbol": bitget_symbol,
             "side": side,
@@ -66,5 +37,9 @@ def place_market_order(symbol, side, quantity):
         return None
 
 # Example usage:
-symbol = "AR/USDT:USDT"
-close_open_position(symbol)
+symbol = "AR/USDT:USDT"  # Adjust symbol formatting if needed
+side = "sell"  # "buy" for long, "sell" for short
+quantity = 10  # Adjust based on your available balance and margin
+
+# Place a new market order
+place_market_order(symbol, side, quantity)
