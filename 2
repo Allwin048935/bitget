@@ -1,13 +1,13 @@
 import ccxt
 
-# Initialize Exchange
-api_key = "YOUR_API_KEY"
-api_secret = "YOUR_API_SECRET"
-password = 
+BITGET_API_KEY = 'bg_6153231782d4239653d4fec1f5e98a96'
+BITGET_API_SECRET = 'a9081277d3e96cdca97b1e3d93f5d3760ae5dc76cb9a7960e429f838c01cd102'
+BITGET_API_PASSWORD = '9025014840'
+
 bitget = ccxt.bitget({
-    "apiKey": api_key,
-    "secret": api_secret,
-    "password": api_password,
+    "apiKey": BITGET_API_KEY,
+    "secret": BITGET_API_SECRET,
+    "password": BITGET_API_PASSWORD,
     "options": {"defaultType": "swap"},  # Ensure you're using the correct type
 })
 
