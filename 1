@@ -60,19 +60,24 @@ def calculate_ema(df, period, column='close'):
 def place_market_order(symbol, side, quantity):
     try:
         order_data = {
-            "symbol": symbol.replace(':USDT', 'USDT'),  # Convert CCXT format (e.g., BRETT/USDT:USDT) to Bitget format (e.g., BRETTUSDT)
+            "symbol": symbol.replace(':USDT', 'USDT'),  # Convert CCXT format to Bitget format (e.g., CHESSUSDT)
             "productType": "USDT-FUTURES",
-            "marginMode": "isolated",  # Matches your exchange config
+            "marginMode": "isolated",
             "marginCoin": "USDT",
-            "size": str(quantity),
+            "size": str(round(quantity, 4)),  # Round to 4 decimals to match typical precision
             "side": side.lower(),  # 'buy' or 'sell'
             "orderType": "market",
             "force": "gtc",
             "clientOid": str(int(time.time() * 1000))
         }
 
-        # Use CCXT's privatePost method to send a signed request
-        response = exchange.privatePostApiV2MixOrderPlaceOrder(order_data)
+        # Use fetch with a signed POST request to the v2 endpoint
+        response = exchange.fetch(
+            method='POST',
+            path='/api/v2/mix/order/place-order',
+            api='private',
+            params=order_data
+        )
         print(f"Market {side.capitalize()} Order placed for {symbol}: {response}")
         return response
     except Exception as e:
