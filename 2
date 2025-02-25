@@ -12,24 +12,25 @@ bitget = ccxt.bitget({
 })
 
 def place_market_order(symbol, side, quantity):
-    """Places a market order on Bitget."""
+    """Places a market order on Bitget considering the correct position mode."""
     try:
         bitget_symbol = symbol.replace("/", "").replace(":USDT", "")  # Convert AR/USDT:USDT to ARUSDT
+        
+        # Ensure position mode is correctly set
+        position_mode = "single_hold"  # For one-way mode (unilateral)
+        
         order_data = {
             "symbol": bitget_symbol,
             "side": side,
             "size": quantity,
             "type": "market",
             "marginCoin": "USDT",
+            "holdSide": "short" if side == "sell" else "long",  # Set correct position type
         }
 
         print(f"Placing {side.upper()} order for {symbol}: {order_data}")
-        response = bitget.create_order(
-            symbol=bitget_symbol,
-            type="market",
-            side=side,
-            amount=quantity
-        )
+        response = bitget.private_post_mix_v1_order_place_order(order_data)
+        
         print(f"Order Response: {response}")
         return response
     except Exception as e:
