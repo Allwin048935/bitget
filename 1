@@ -56,61 +56,27 @@ def fetch_ohlcv(symbol, timeframe, limit):
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to place a market buy order
-def place_market_buy_order(symbol, quantity):
+# Function to place a market order using raw API call
+def place_market_order(symbol, side, quantity):
     try:
-        position = exchange.fetch_position(symbol)
-        position_size = float(position.get('contracts', 0) or 0)  # Default to 0 if None
-        position_side = position.get('side') if position else None
-
-        params = {
-            'orderType': 'market',
-            'holdSide': 'long' if position_size == 0 else 'close_short',
+        order_data = {
+            "symbol": symbol.replace(':USDT', 'USDT'),  # Convert CCXT format (e.g., BRETT/USDT:USDT) to Bitget format (e.g., BRETTUSDT)
+            "productType": "USDT-FUTURES",
+            "marginMode": "isolated",  # Matches your exchange config
+            "marginCoin": "USDT",
+            "size": str(quantity),
+            "side": side.lower(),  # 'buy' or 'sell'
+            "orderType": "market",
+            "force": "gtc",
+            "clientOid": str(int(time.time() * 1000))
         }
-        if position_side == 'short' and position_size > 0:
-            params['reduceOnly'] = 'YES'
 
-        order = exchange.create_order(
-            symbol=symbol,
-            type='market',
-            side='buy',
-            amount=quantity,
-            params=params
-        )
-        print(f"Market Buy Order placed for {symbol}: {order}")
-        return order
+        # Use CCXT's privatePost method to send a signed request
+        response = exchange.privatePostApiV2MixOrderPlaceOrder(order_data)
+        print(f"Market {side.capitalize()} Order placed for {symbol}: {response}")
+        return response
     except Exception as e:
-        print(f"Error placing Market Buy Order for {symbol}: {e}")
-        return None
-
-# Function to place a market sell order
-def place_market_sell_order(symbol, quantity):
-    try:
-        position = exchange.fetch_position(symbol)
-        position_size = float(position.get('contracts', 0) or 0)  # Default to 0 if None
-        position_side = position.get('side') if position else None
-
-        mode = get_position_mode(symbol)
-        print(f"Position mode for {symbol}: {mode}")
-
-        params = {
-            'orderType': 'market',
-            'holdSide': 'short' if position_size == 0 else 'close_long',
-        }
-        if position_side == 'long' and position_size > 0:
-            params['reduceOnly'] = 'YES'
-
-        order = exchange.create_order(
-            symbol=symbol,
-            type='market',
-            side='sell',
-            amount=quantity,
-            params=params
-        )
-        print(f"Market Sell Order placed for {symbol}: {order}")
-        return order
-    except Exception as e:
-        print(f"Error placing Market Sell Order for {symbol}: {e}")
+        print(f"Error placing Market {side.capitalize()} Order for {symbol}: {e}")
         return None
 
 # Function to close open positions
@@ -122,28 +88,10 @@ def close_open_position(symbol):
         position_side = position.get('side') if position else None
 
         if position_side == 'long' and position_size > 0:
-            order = exchange.create_order(
-                symbol,
-                'market',
-                'sell',
-                position_size,
-                params={
-                    'orderType': 'market',
-                    'reduceOnly': 'YES'
-                }
-            )
+            order = place_market_order(symbol, 'sell', position_size)
             print(f"Closing long position for {symbol}: {order}")
         elif position_side == 'short' and position_size > 0:
-            order = exchange.create_order(
-                symbol,
-                'market',
-                'buy',
-                position_size,
-                params={
-                    'orderType': 'market',
-                    'reduceOnly': 'YES'
-                }
-            )
+            order = place_market_order(symbol, 'buy', position_size)
             print(f"Closing short position for {symbol}: {order}")
         else:
             print(f"No open position to close for {symbol}")
@@ -190,7 +138,7 @@ def ema_strategy():
                     print(f'{symbol} Buy Signal (Crossover)')
                     close_open_position(symbol)
                     close_open_orders(symbol)
-                    open_orders[symbol] = place_market_buy_order(symbol, quantity)
+                    open_orders[symbol] = place_market_order(symbol, 'buy', quantity)
                     if open_orders[symbol]:
                         last_order_types[symbol] = 'BUY'
 
@@ -198,7 +146,7 @@ def ema_strategy():
                     print(f'{symbol} Sell Signal (Crossunder)')
                     close_open_position(symbol)
                     close_open_orders(symbol)
-                    open_orders[symbol] = place_market_sell_order(symbol, quantity)
+                    open_orders[symbol] = place_market_order(symbol, 'sell', quantity)
                     if open_orders[symbol]:
                         last_order_types[symbol] = 'SELL'
 
