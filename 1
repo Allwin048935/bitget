@@ -35,7 +35,7 @@ def get_position_mode(symbol):
                 return 'one-way' if pos['info'].get('holdMode') == 'single_hold' else 'hedge'
         return 'one-way'  # Default assumption if no position found
     except Exception as e:
-        print(f"Error fetching position mode: {e}")
+        print(f"Error fetching position mode for {symbol}: {e}")
         return 'one-way'  # Fallback
 
 # Function to fetch historical data for futures with EMA calculation
@@ -60,15 +60,15 @@ def calculate_ema(df, period, column='close'):
 def place_market_buy_order(symbol, quantity):
     try:
         position = exchange.fetch_position(symbol)
-        position_size = float(position.get('contracts', 0)) if position else 0
+        position_size = float(position.get('contracts', 0) or 0)  # Default to 0 if None
         position_side = position.get('side') if position else None
 
         params = {
             'orderType': 'market',
-            'holdSide': 'long' if position_size == 0 else 'close_short',  # Open long or close short
+            'holdSide': 'long' if position_size == 0 else 'close_short',
         }
         if position_side == 'short' and position_size > 0:
-            params['reduceOnly'] = 'YES'  # Close short position
+            params['reduceOnly'] = 'YES'
 
         order = exchange.create_order(
             symbol=symbol,
@@ -87,7 +87,7 @@ def place_market_buy_order(symbol, quantity):
 def place_market_sell_order(symbol, quantity):
     try:
         position = exchange.fetch_position(symbol)
-        position_size = float(position.get('contracts', 0)) if position else 0
+        position_size = float(position.get('contracts', 0) or 0)  # Default to 0 if None
         position_side = position.get('side') if position else None
 
         mode = get_position_mode(symbol)
@@ -95,10 +95,10 @@ def place_market_sell_order(symbol, quantity):
 
         params = {
             'orderType': 'market',
-            'holdSide': 'short' if position_size == 0 else 'close_long',  # Open short or close long
+            'holdSide': 'short' if position_size == 0 else 'close_long',
         }
         if position_side == 'long' and position_size > 0:
-            params['reduceOnly'] = 'YES'  # Close long position
+            params['reduceOnly'] = 'YES'
 
         order = exchange.create_order(
             symbol=symbol,
@@ -118,7 +118,7 @@ def close_open_position(symbol):
     try:
         position = exchange.fetch_position(symbol)
         print(f"Attempting to close position for {symbol}: {position}")
-        position_size = float(position.get('contracts', 0)) if position else 0
+        position_size = float(position.get('contracts', 0) or 0)  # Default to 0 if None
         position_side = position.get('side') if position else None
 
         if position_side == 'long' and position_size > 0:
@@ -145,6 +145,8 @@ def close_open_position(symbol):
                 }
             )
             print(f"Closing short position for {symbol}: {order}")
+        else:
+            print(f"No open position to close for {symbol}")
         open_orders[symbol] = None
     except Exception as e:
         print(f"Error closing open position for {symbol}: {e}")
@@ -179,7 +181,7 @@ def ema_strategy():
 
                 latest_close = float(latest_candle['close'])
                 quantity = fixed_quantity_usdt / latest_close
-                print(f"Symbol: {symbol}, Latest Close: {latest_close}, Quantity: {quantity}")
+                print(f"Symbol: {symbol}, Latest Close: {latest_close:.2f}, Quantity: {quantity:.8f}")
 
                 latest_short_ema = historical_data['short_ema'].iloc[-1]
                 latest_long_ema = historical_data['long_ema'].iloc[-1]
