@@ -26,17 +26,13 @@ open_orders = {symbol: None for symbol in symbols}
 # Fixed quantity in USDT worth of contracts
 fixed_quantity_usdt = 6
 
-# Function to fetch position mode (Bitget-specific raw API call)
+# Function to fetch position mode
 def get_position_mode(symbol):
     try:
-        # Raw API call to get position mode (endpoint: /api/v2/mix/position/all-position-v2)
-        response = exchange.private_mix_get_v2_mix_position_all_position_v2({
-            'productType': 'USDT-FUTURES',  # Adjust if needed
-            'marginCoin': 'USDT'
-        })
-        for pos in response['data']:
+        positions = exchange.fetch_positions([symbol])
+        for pos in positions:
             if pos['symbol'] == symbol:
-                return 'one-way' if pos['holdMode'] == 'single_hold' else 'hedge'
+                return 'one-way' if pos['info'].get('holdMode') == 'single_hold' else 'hedge'
         return 'one-way'  # Default assumption if no position found
     except Exception as e:
         print(f"Error fetching position mode: {e}")
@@ -63,13 +59,23 @@ def calculate_ema(df, period, column='close'):
 # Function to place a market buy order
 def place_market_buy_order(symbol, quantity):
     try:
-        order = exchange.create_market_buy_order(
+        position = exchange.fetch_position(symbol)
+        position_size = float(position.get('contracts', 0)) if position else 0
+        position_side = position.get('side') if position else None
+
+        params = {
+            'orderType': 'market',
+            'holdSide': 'long' if position_size == 0 else 'close_short',  # Open long or close short
+        }
+        if position_side == 'short' and position_size > 0:
+            params['reduceOnly'] = 'YES'  # Close short position
+
+        order = exchange.create_order(
             symbol=symbol,
+            type='market',
+            side='buy',
             amount=quantity,
-            params={
-                'side': 'buy',  # One-way mode: buy to open long or close short
-                'orderType': 'market'
-            }
+            params=params
         )
         print(f"Market Buy Order placed for {symbol}: {order}")
         return order
@@ -80,17 +86,26 @@ def place_market_buy_order(symbol, quantity):
 # Function to place a market sell order
 def place_market_sell_order(symbol, quantity):
     try:
-        # Log position mode for debugging
+        position = exchange.fetch_position(symbol)
+        position_size = float(position.get('contracts', 0)) if position else 0
+        position_side = position.get('side') if position else None
+
         mode = get_position_mode(symbol)
         print(f"Position mode for {symbol}: {mode}")
 
-        order = exchange.create_market_sell_order(
+        params = {
+            'orderType': 'market',
+            'holdSide': 'short' if position_size == 0 else 'close_long',  # Open short or close long
+        }
+        if position_side == 'long' and position_size > 0:
+            params['reduceOnly'] = 'YES'  # Close long position
+
+        order = exchange.create_order(
             symbol=symbol,
+            type='market',
+            side='sell',
             amount=quantity,
-            params={
-                'side': 'sell',  # One-way mode: sell to open short or close long
-                'orderType': 'market'
-            }
+            params=params
         )
         print(f"Market Sell Order placed for {symbol}: {order}")
         return order
@@ -98,31 +113,33 @@ def place_market_sell_order(symbol, quantity):
         print(f"Error placing Market Sell Order for {symbol}: {e}")
         return None
 
-# Function to close open positions (Kept for explicit use)
+# Function to close open positions
 def close_open_position(symbol):
     try:
         position = exchange.fetch_position(symbol)
         print(f"Attempting to close position for {symbol}: {position}")
-        position_size = float(position.get('positionAmt', 0)) if position else 0
+        position_size = float(position.get('contracts', 0)) if position else 0
         position_side = position.get('side') if position else None
 
         if position_side == 'long' and position_size > 0:
-            order = exchange.create_market_sell_order(
+            order = exchange.create_order(
                 symbol,
+                'market',
+                'sell',
                 position_size,
                 params={
-                    'side': 'sell',  # One-way mode: sell to close long
                     'orderType': 'market',
                     'reduceOnly': 'YES'
                 }
             )
             print(f"Closing long position for {symbol}: {order}")
         elif position_side == 'short' and position_size > 0:
-            order = exchange.create_market_buy_order(
+            order = exchange.create_order(
                 symbol,
+                'market',
+                'buy',
                 position_size,
                 params={
-                    'side': 'buy',  # One-way mode: buy to close short
                     'orderType': 'market',
                     'reduceOnly': 'YES'
                 }
@@ -145,7 +162,7 @@ def close_open_orders(symbol):
 # Main trading function for futures
 def ema_strategy():
     exchange.load_markets()
-    print("Available markets:", [s for s in exchange.markets.keys() if 'MOG' in s])
+    print("Available markets:", [s for s in exchange.markets.keys() if 'USDT' in s])
 
     while True:
         try:
@@ -183,10 +200,10 @@ def ema_strategy():
                     if open_orders[symbol]:
                         last_order_types[symbol] = 'SELL'
 
-            time.sleep(300)
+            time.sleep(300)  # Wait 5 minutes
         except Exception as e:
             print(f'An error occurred in main loop: {e}')
-            time.sleep(60)
+            time.sleep(60)  # Wait 1 minute before retrying
 
 # Run the trading strategy
 if __name__ == "__main__":
