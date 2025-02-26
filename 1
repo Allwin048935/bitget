@@ -15,30 +15,20 @@ exchange = ccxt.bitget({
     }
 })
 
-# Define EMA strategy parameters
+# EMA strategy parameters
 short_ema_period = 5
 long_ema_period = 10
+fixed_quantity_usdt = 6
 
-# Track last order type and open orders for each symbol
+# Track last order types and open orders for each symbol
 last_order_types = {symbol: None for symbol in symbols}
 open_orders = {symbol: None for symbol in symbols}
 
-# Fixed quantity in USDT worth of contracts
-fixed_quantity_usdt = 6
+# Function to calculate EMA
+def calculate_ema(df, period, column='close'):
+    return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to fetch position mode
-def get_position_mode(symbol):
-    try:
-        positions = exchange.fetch_positions([symbol])
-        for pos in positions:
-            if pos['symbol'] == symbol:
-                return 'one-way' if pos['info'].get('holdMode') == 'single_hold' else 'hedge'
-        return 'one-way'  # Default if no position found
-    except Exception as e:
-        print(f"Error fetching position mode for {symbol}: {e}")
-        return 'one-way'  # Fallback
-
-# Function to fetch historical data for futures with EMA calculation
+# Function to fetch OHLCV data
 def fetch_ohlcv(symbol, timeframe, limit):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -52,9 +42,17 @@ def fetch_ohlcv(symbol, timeframe, limit):
         print(f"Error fetching OHLCV for {symbol}: {e}")
         return None
 
-# Function to calculate EMA
-def calculate_ema(df, period, column='close'):
-    return df[column].ewm(span=period, adjust=False).mean()
+# Function to fetch position mode
+def get_position_mode(symbol):
+    try:
+        positions = exchange.fetch_positions([symbol])
+        for pos in positions:
+            if pos['symbol'] == symbol:
+                return 'one-way' if pos['info'].get('holdMode') == 'single_hold' else 'hedge'
+        return 'one-way'
+    except Exception as e:
+        print(f"Error fetching position mode for {symbol}: {e}")
+        return 'one-way'
 
 # Function to place a market order
 def place_market_order(symbol, side, quantity, position_mode='one-way'):
@@ -92,36 +90,26 @@ def place_market_order(symbol, side, quantity, position_mode='one-way'):
         return response
     except Exception as e:
         print(f"Error placing Market {side.capitalize()} Order for {symbol}: {type(e).__name__} - {str(e)}")
-        import traceback
-        traceback.print_exc()
         return None
 
-# Function to close an existing position if it exists
+# Function to close an existing position
 def close_existing_position(symbol, position_mode='one-way'):
     try:
-        position = exchange.fetch_position(symbol)
-        if not position or isinstance(position, list) or 'contracts' not in position:
-            print(f"No existing position for {symbol} to close")
-            return True  # No position, proceed with new order
+        positions = exchange.fetch_positions([symbol])
+        for position in positions:
+            if position['symbol'] == symbol:
+                position_size = float(position.get('contracts', 0) or 0)
+                position_side = position.get('side', '').lower()
 
-        position_size = float(position.get('contracts', 0) or 0)
-        position_side = position.get('side', '').lower()
-
-        if position_size <= 0:
-            print(f"No existing position size for {symbol} to close")
-            return True  # No size, proceed with new order
-
-        close_side = 'sell' if position_side == 'long' else 'buy'
-        print(f"Closing existing {position_side} position for {symbol} with size {position_size}")
-        response = place_market_order(symbol, close_side, position_size, position_mode)
-        if response:
-            print(f"Successfully closed {position_side} position for {symbol}")
-            return True
-        else:
-            print(f"Failed to close {position_side} position for {symbol}")
-            return False
+                if position_size > 0:
+                    close_side = 'sell' if position_side == 'long' else 'buy'
+                    print(f"Closing existing {position_side} position for {symbol} with size {position_size}")
+                    response = place_market_order(symbol, close_side, position_size, position_mode)
+                    return response is not None
+        print(f"No existing position for {symbol} to close")
+        return True
     except Exception as e:
-        print(f"Error closing existing position for {symbol}: {type(e).__name__} - {str(e)}")
+        print(f"Error closing existing position for {symbol}: {e}")
         return False
 
 # Function to close open orders
@@ -164,11 +152,9 @@ def ema_strategy():
 
                 if latest_short_ema > latest_long_ema and last_order_types[symbol] != 'BUY':
                     print(f'{symbol} Buy Signal (Crossover)')
-                    # Check and close short position if it exists
-                    if last_order_types[symbol] == 'SELL':
-                        if not close_existing_position(symbol, position_mode):
-                            print(f"Skipping buy order for {symbol} due to close failure")
-                            continue
+                    if last_order_types[symbol] == 'SELL' and not close_existing_position(symbol, position_mode):
+                        print(f"Skipping buy order for {symbol} due to close failure")
+                        continue
                     close_open_orders(symbol)
                     open_orders[symbol] = place_market_order(symbol, 'buy', quantity, position_mode)
                     if open_orders[symbol]:
@@ -176,11 +162,9 @@ def ema_strategy():
 
                 elif latest_short_ema < latest_long_ema and last_order_types[symbol] != 'SELL':
                     print(f'{symbol} Sell Signal (Crossunder)')
-                    # Check and close long position if it exists
-                    if last_order_types[symbol] == 'BUY':
-                        if not close_existing_position(symbol, position_mode):
-                            print(f"Skipping sell order for {symbol} due to close failure")
-                            continue
+                    if last_order_types[symbol] == 'BUY' and not close_existing_position(symbol, position_mode):
+                        print(f"Skipping sell order for {symbol} due to close failure")
+                        continue
                     close_open_orders(symbol)
                     open_orders[symbol] = place_market_order(symbol, 'sell', quantity, position_mode)
                     if open_orders[symbol]:
