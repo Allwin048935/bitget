@@ -19,7 +19,7 @@ exchange = ccxt.bitget({
 short_ema_period = 5
 long_ema_period = 10
 
-# Track the last order type placed and open orders for each symbol
+# Track last order type and open orders for each symbol
 last_order_types = {symbol: None for symbol in symbols}
 open_orders = {symbol: None for symbol in symbols}
 
@@ -33,7 +33,7 @@ def get_position_mode(symbol):
         for pos in positions:
             if pos['symbol'] == symbol:
                 return 'one-way' if pos['info'].get('holdMode') == 'single_hold' else 'hedge'
-        return 'one-way'  # Default assumption if no position found
+        return 'one-way'  # Default if no position found
     except Exception as e:
         print(f"Error fetching position mode for {symbol}: {e}")
         return 'one-way'  # Fallback
@@ -56,51 +56,65 @@ def fetch_ohlcv(symbol, timeframe, limit):
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to place a market order using raw API call
-def place_market_order(symbol, side, quantity):
+# Function to place a market order
+def place_market_order(symbol, side, quantity, position_mode='one-way'):
     try:
+        bitget_symbol = symbol.replace(':USDT', 'USDT')  # Convert to Bitget format (e.g., AGLDUSDT)
         order_data = {
-            "symbol": symbol.replace(':USDT', 'USDT'),  # Convert CCXT format to Bitget format (e.g., 1000SATSUSDT)
+            "symbol": bitget_symbol,
             "productType": "USDT-FUTURES",
             "marginMode": "isolated",
             "marginCoin": "USDT",
-            "size": str(round(quantity, 4)),  # Round to 4 decimals for precision
+            "size": str(exchange.amount_to_precision(symbol, quantity)),  # Dynamic precision
             "side": side.lower(),  # 'buy' or 'sell'
             "orderType": "market",
             "force": "gtc",
             "clientOid": str(int(time.time() * 1000))
         }
 
-        # Use request() for a signed POST to the v2 endpoint
+        # Only include tradeSide in hedge mode
+        if position_mode == 'hedge':
+            trade_side = "open" if side.lower() in ['buy', 'sell'] and last_order_types[symbol] != side.upper() else "close"
+            order_data["tradeSide"] = trade_side
+
+        print(f"Placing market order for {symbol}: {order_data}")
         response = exchange.request(
             method='POST',
             path='/api/v2/mix/order/place-order',
             api='private',
             params=order_data
         )
+
+        if isinstance(response, dict) and response.get('code') != '00000':
+            print(f"API Error for {symbol}: {response.get('msg', 'Unknown error')}")
+            return None
+
         print(f"Market {side.capitalize()} Order placed for {symbol}: {response}")
         return response
     except Exception as e:
-        print(f"Error placing Market {side.capitalize()} Order for {symbol}: {e}")
+        print(f"Error placing Market {side.capitalize()} Order for {symbol}: {type(e).__name__} - {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
-# Function to close open positions
-def close_open_position(symbol):
+# Function to close open position
+def close_open_position(symbol, position_mode='one-way'):
     try:
         position = exchange.fetch_position(symbol)
-        print(f"Attempting to close position for {symbol}: {position}")
-        position_size = float(position.get('contracts', 0) or 0)  # Default to 0 if None
-        position_side = position.get('side') if position else None
+        position_size = float(position.get('contracts', 0) or 0)
+        position_side = position.get('side', '').lower() if position else None
 
-        if position_side == 'long' and position_size > 0:
-            order = place_market_order(symbol, 'sell', position_size)
-            print(f"Closing long position for {symbol}: {order}")
-        elif position_side == 'short' and position_size > 0:
-            order = place_market_order(symbol, 'buy', position_size)
-            print(f"Closing short position for {symbol}: {order}")
-        else:
+        if position_size <= 0:
             print(f"No open position to close for {symbol}")
-        open_orders[symbol] = None
+            return
+
+        close_side = 'sell' if position_side == 'long' else 'buy'
+        print(f"Closing {position_side} position for {symbol} with size {position_size}")
+
+        response = place_market_order(symbol, close_side, position_size, position_mode)
+        if response:
+            open_orders[symbol] = None
+            last_order_types[symbol] = None  # Reset last order type after closing
     except Exception as e:
         print(f"Error closing open position for {symbol}: {e}")
 
@@ -114,7 +128,7 @@ def close_open_orders(symbol):
     except Exception as e:
         print(f"Error cancelling open order for {symbol}: {e}")
 
-# Main trading function for futures
+# Main trading function
 def ema_strategy():
     exchange.load_markets()
     print("Available markets:", [s for s in exchange.markets.keys() if 'USDT' in s])
@@ -122,6 +136,10 @@ def ema_strategy():
     while True:
         try:
             for symbol in symbols:
+                # Fetch position mode dynamically
+                position_mode = get_position_mode(symbol)
+                print(f"{symbol} Position Mode: {position_mode}")
+
                 historical_data = fetch_ohlcv(symbol, time_interval, 100)
                 if historical_data is None or len(historical_data) < long_ema_period:
                     print(f"Not enough data for {symbol}. Waiting for more data...")
@@ -141,24 +159,24 @@ def ema_strategy():
 
                 if latest_short_ema > latest_long_ema and last_order_types[symbol] != 'BUY':
                     print(f'{symbol} Buy Signal (Crossover)')
-                    close_open_position(symbol)
+                    close_open_position(symbol, position_mode)
                     close_open_orders(symbol)
-                    open_orders[symbol] = place_market_order(symbol, 'buy', quantity)
+                    open_orders[symbol] = place_market_order(symbol, 'buy', quantity, position_mode)
                     if open_orders[symbol]:
                         last_order_types[symbol] = 'BUY'
 
                 elif latest_short_ema < latest_long_ema and last_order_types[symbol] != 'SELL':
                     print(f'{symbol} Sell Signal (Crossunder)')
-                    close_open_position(symbol)
+                    close_open_position(symbol, position_mode)
                     close_open_orders(symbol)
-                    open_orders[symbol] = place_market_order(symbol, 'sell', quantity)
+                    open_orders[symbol] = place_market_order(symbol, 'sell', quantity, position_mode)
                     if open_orders[symbol]:
                         last_order_types[symbol] = 'SELL'
 
             time.sleep(300)  # Wait 5 minutes
         except Exception as e:
             print(f'An error occurred in main loop: {e}')
-            time.sleep(60)  # Wait 1 minute before retrying
+            time.sleep(60)
 
 # Run the trading strategy
 if __name__ == "__main__":
