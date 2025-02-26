@@ -57,34 +57,40 @@ def get_position_mode(symbol):
 # Function to place a market order
 def place_market_order(symbol, side, quantity, position_mode='one-way'):
     try:
-        bitget_symbol = symbol.replace(':USDT', 'USDT')
+        # Ensure Bitget-compatible symbol format
+        bitget_symbol = symbol.replace(':USDT', '_UMCBL')  # e.g., BTCUSDT -> BTCUSDT_UMCBL
+        
+        # Map side to Bitget's terminology
+        if position_mode == 'one-way':
+            trade_side = 'buy' if side.lower() == 'buy' else 'sell'
+        else:  # hedge mode
+            if side.lower() == 'buy':
+                trade_side = 'open_long' if last_order_types[symbol] != 'BUY' else 'close_short'
+            else:
+                trade_side = 'open_short' if last_order_types[symbol] != 'SELL' else 'close_long'
+
         order_data = {
-            "symbol": bitget_symbol,
-            "productType": "USDT-FUTURES",
-            "marginMode": "isolated",
-            "marginCoin": "USDT",
-            "size": str(exchange.amount_to_precision(symbol, quantity)),
-            "side": side.lower(),
-            "orderType": "market",
-            "force": "gtc",
-            "clientOid": str(int(time.time() * 1000))
+            'symbol': bitget_symbol,
+            'marginCoin': 'USDT',
+            'side': trade_side,
+            'orderType': 'market',
+            'size': str(exchange.amount_to_precision(symbol, quantity)),
+            'timeInForceValue': 'gtc',  # Good till canceled
+            'clientOid': str(int(time.time() * 1000)),
         }
 
-        if position_mode == 'hedge':
-            trade_side = "open" if side.lower() in ['buy', 'sell'] and last_order_types[symbol] != side.upper() else "close"
-            order_data["tradeSide"] = trade_side
-
         print(f"Placing market order for {symbol}: {order_data}")
-        response = exchange.request(
-            method='POST',
-            path='/api/v2/mix/order/place-order',
-            api='private',
-            params=order_data
+        response = exchange.create_order(
+            symbol=bitget_symbol,
+            type='market',
+            side=trade_side,
+            amount=quantity,
+            params={
+                'marginMode': 'isolated',
+                'marginCoin': 'USDT',
+                'clientOid': order_data['clientOid']
+            }
         )
-
-        if isinstance(response, dict) and response.get('code') != '00000':
-            print(f"API Error for {symbol}: {response.get('msg', 'Unknown error')}")
-            return None
 
         print(f"Market {side.capitalize()} Order placed for {symbol}: {response}")
         return response
