@@ -2,18 +2,23 @@ import ccxt
 import pandas as pd
 import time
 from config import BITGET_API_KEY, BITGET_API_SECRET, BITGET_API_PASSWORD, symbols, time_interval
+from bitget.v1.mix.order_api import OrderApi
+from bitget.exceptions import BitgetAPIException
 
-# Create a Bitget Futures client
+# CCXT client for market data
 exchange = ccxt.bitget({
     'apiKey': BITGET_API_KEY,
     'secret': BITGET_API_SECRET,
     'password': BITGET_API_PASSWORD,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'swap',  # Bitget uses 'swap' for perpetual futures
-        'marginMode': 'isolated',  # Default to isolated margin
+        'defaultType': 'swap',
+        'marginMode': 'isolated',
     }
 })
+
+# Bitget SDK client for order placement
+bitget_order_client = OrderApi(BITGET_API_KEY, BITGET_API_SECRET, BITGET_API_PASSWORD)
 
 # EMA strategy parameters
 short_ema_period = 5
@@ -28,7 +33,7 @@ open_orders = {symbol: None for symbol in symbols}
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to fetch OHLCV data
+# Function to fetch OHLCV data (using CCXT)
 def fetch_ohlcv(symbol, timeframe, limit):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -42,7 +47,7 @@ def fetch_ohlcv(symbol, timeframe, limit):
         print(f"Error fetching OHLCV for {symbol}: {e}")
         return None
 
-# Function to fetch position mode
+# Function to fetch position mode (using CCXT)
 def get_position_mode(symbol):
     try:
         positions = exchange.fetch_positions([symbol])
@@ -54,51 +59,39 @@ def get_position_mode(symbol):
         print(f"Error fetching position mode for {symbol}: {e}")
         return 'one-way'
 
-# Function to place a market order
+# Function to place a market order (using Bitget SDK)
 def place_market_order(symbol, side, quantity, position_mode='one-way'):
     try:
-        # Ensure Bitget-compatible symbol format
-        bitget_symbol = symbol.replace(':USDT', '_UMCBL')  # e.g., BTCUSDT -> BTCUSDT_UMCBL
-        
-        # Map side to Bitget's terminology
+        bitget_symbol = symbol.replace(':USDT', '_UMCBL')  # e.g., BTCUSDT_UMCBL
         if position_mode == 'one-way':
-            trade_side = 'buy' if side.lower() == 'buy' else 'sell'
+            trade_side = 'open_long' if side.lower() == 'buy' else 'open_short'
         else:  # hedge mode
             if side.lower() == 'buy':
                 trade_side = 'open_long' if last_order_types[symbol] != 'BUY' else 'close_short'
             else:
                 trade_side = 'open_short' if last_order_types[symbol] != 'SELL' else 'close_long'
 
-        order_data = {
+        params = {
             'symbol': bitget_symbol,
             'marginCoin': 'USDT',
             'side': trade_side,
             'orderType': 'market',
             'size': str(exchange.amount_to_precision(symbol, quantity)),
-            'timeInForceValue': 'gtc',  # Good till canceled
             'clientOid': str(int(time.time() * 1000)),
         }
 
-        print(f"Placing market order for {symbol}: {order_data}")
-        response = exchange.create_order(
-            symbol=bitget_symbol,
-            type='market',
-            side=trade_side,
-            amount=quantity,
-            params={
-                'marginMode': 'isolated',
-                'marginCoin': 'USDT',
-                'clientOid': order_data['clientOid']
-            }
-        )
-
+        print(f"Placing market order for {symbol}: {params}")
+        response = bitget_order_client.placeOrder(params)
         print(f"Market {side.capitalize()} Order placed for {symbol}: {response}")
-        return response
+        return response if response['code'] == '00000' else None
+    except BitgetAPIException as e:
+        print(f"Error placing Market {side.capitalize()} Order for {symbol}: {e.message}")
+        return None
     except Exception as e:
-        print(f"Error placing Market {side.capitalize()} Order for {symbol}: {type(e).__name__} - {str(e)}")
+        print(f"Unexpected error placing order for {symbol}: {type(e).__name__} - {str(e)}")
         return None
 
-# Function to close an existing position
+# Function to close an existing position (using Bitget SDK)
 def close_existing_position(symbol, position_mode='one-way'):
     try:
         positions = exchange.fetch_positions([symbol])
@@ -108,17 +101,29 @@ def close_existing_position(symbol, position_mode='one-way'):
                 position_side = position.get('side', '').lower()
 
                 if position_size > 0:
-                    close_side = 'sell' if position_side == 'long' else 'buy'
+                    close_side = 'close_long' if position_side == 'long' else 'close_short'
                     print(f"Closing existing {position_side} position for {symbol} with size {position_size}")
-                    response = place_market_order(symbol, close_side, position_size, position_mode)
-                    return response is not None
+                    bitget_symbol = symbol.replace(':USDT', '_UMCBL')
+                    params = {
+                        'symbol': bitget_symbol,
+                        'marginCoin': 'USDT',
+                        'side': close_side,
+                        'orderType': 'market',
+                        'size': str(position_size),
+                        'clientOid': str(int(time.time() * 1000)),
+                    }
+                    response = bitget_order_client.placeOrder(params)
+                    return response['code'] == '00000'
         print(f"No existing position for {symbol} to close")
         return True
+    except BitgetAPIException as e:
+        print(f"Error closing position for {symbol}: {e.message}")
+        return False
     except Exception as e:
-        print(f"Error closing existing position for {symbol}: {e}")
+        print(f"Unexpected error closing position for {symbol}: {e}")
         return False
 
-# Function to close open orders
+# Function to close open orders (using CCXT)
 def close_open_orders(symbol):
     try:
         if open_orders[symbol] and 'id' in open_orders[symbol]:
