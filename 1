@@ -1,45 +1,148 @@
-import ccxt
+import ccxt.async_support as ccxt
 import pandas as pd
+import requests
 import time
-from config import BITGET_API_KEY, BITGET_API_SECRET, BITGET_API_PASSWORD, symbols, time_interval
-from bitget.v1.mix.order_api import OrderApi
-from bitget.exceptions import BitgetAPIException
+import hmac
+import hashlib
+import json
+import asyncio
+import ta
+from config import BITGET_API_KEY, BITGET_API_SECRET, BITGET_PASSPHRASE, time_interval
 
-# CCXT client for market data
+# Trading parameters for all symbols
+trading_params = {
+    "market_type": "swap",
+    "margin_mode": "isolated",
+    "leverage": 3,
+    "product_type": "USDT-FUTURES"
+}
+
+# API endpoints for Bitget
+BASE_URL = "https://api.bitget.com"
+PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
+
+# Fetch symbols dynamically from Bitget API
+def fetch_bitget_symbols():
+    url = f"{BASE_URL}/api/v2/mix/market/tickers"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        symbols_info = {
+            s['symbol']: float(s['minTradeAmount'])
+            for s in data['data']
+            if s['quoteCoin'] == 'USDT' and s['state'] == 'open'
+        }
+        return symbols_info
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching symbols from Bitget: {e}")
+        return {}
+
+# Create a Bitget client
 exchange = ccxt.bitget({
     'apiKey': BITGET_API_KEY,
     'secret': BITGET_API_SECRET,
-    'password': BITGET_API_PASSWORD,
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'swap',
-        'marginMode': 'isolated',
-    }
+    'password': BITGET_PASSPHRASE,
+    'options': {'defaultType': 'swap'},
+    'enableRateLimit': True
 })
 
-# Bitget SDK client for order placement
-bitget_order_client = OrderApi(BITGET_API_KEY, BITGET_API_SECRET, BITGET_API_PASSWORD)
+# Define EMA period for MACD calculation
+macd_ema_period = 3
 
-# EMA strategy parameters
-short_ema_period = 5
-long_ema_period = 10
-fixed_quantity_usdt = 6
+# Get initial symbols and their min_amounts
+symbols_info = fetch_bitget_symbols()
+symbols = list(symbols_info.keys())
 
-# Track last order types and open orders for each symbol
+# Track last order types, open orders, and last signals
 last_order_types = {symbol: None for symbol in symbols}
 open_orders = {symbol: None for symbol in symbols}
+last_signals = {symbol: None for symbol in symbols}
+
+# Function to generate signature for Bitget API
+def generate_signature(timestamp, method, path, body, secret):
+    message = timestamp + method.upper() + path + (body if body else '')
+    return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
+
+# Function to place order with TP/SL using Bitget API
+def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None):
+    timestamp = str(int(time.time() * 1000))
+    path = "/api/v2/mix/order/place-order"
+    
+    # Calculate TP/SL prices
+    if side == 'buy' and trade_side == 'open':  # Long
+        tp_price = str(round(entry_price * 1.01, 6)) if entry_price else None
+        sl_price = str(round(entry_price * 0.98, 6)) if entry_price else None
+    elif side == 'sell' and trade_side == 'open':  # Short
+        tp_price = str(round(entry_price * 0.99, 6)) if entry_price else None
+        sl_price = str(round(entry_price * 1.02, 6)) if entry_price else None
+    else:  # Closing position
+        tp_price = None
+        sl_price = None
+
+    params = {
+        "symbol": symbol,
+        "productType": trading_params["product_type"],
+        "marginMode": trading_params["margin_mode"],
+        "marginCoin": "USDT",
+        "size": str(quantity),
+        "side": side,
+        "tradeSide": trade_side,
+        "orderType": "market",
+        "clientOid": f"{symbol}_{timestamp}"
+    }
+    if tp_price:
+        params["presetStopSurplusPrice"] = tp_price
+    if sl_price:
+        params["presetStopLossPrice"] = sl_price
+
+    body = json.dumps(params)
+    headers = {
+        "ACCESS-KEY": BITGET_API_KEY,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+        "Content-Type": "application/json",
+        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, body, BITGET_API_SECRET)
+    }
+
+    try:
+        response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
+        response.raise_for_status()
+        data = response.json()
+        if data.get('code') == "00000":
+            print(f"Order placed for {symbol}: {side}/{trade_side} - OrderId: {data['data']['orderId']}")
+            return data['data']['orderId']
+        else:
+            print(f"Failed to place order for {symbol}: {data.get('msg')}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error placing order for {symbol}: {e}")
+        return None
+
+# Async function to set trading parameters
+async def set_trading_parameters(symbol):
+    try:
+        await exchange.set_leverage(trading_params['leverage'], symbol, params={'marginMode': trading_params['margin_mode']})
+        print(f"Set parameters for {symbol}: Leverage {trading_params['leverage']}x, {trading_params['margin_mode']} mode")
+        return True
+    except Exception as e:
+        print(f"Error setting trading parameters for {symbol}: {e}")
+        return False
 
 # Function to calculate EMA
 def calculate_ema(df, period, column='close'):
     return df[column].ewm(span=period, adjust=False).mean()
 
-# Function to fetch OHLCV data (using CCXT)
-def fetch_ohlcv(symbol, timeframe, limit):
+# Async function to fetch historical data and calculate MACD
+async def fetch_ohlcv(symbol, timeframe, limit):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['short_ema'] = calculate_ema(df, short_ema_period)
-        df['long_ema'] = calculate_ema(df, long_ema_period)
+        df['ema_9'] = calculate_ema(df, macd_ema_period)
+        macd = ta.trend.MACD(df['ema_9'], window_slow=26, window_fast=12, window_sign=9)
+        df['macd'] = macd.macd()
+        df['signal'] = macd.macd_signal()
+        df['histogram'] = macd.macd_diff()
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         return df
@@ -47,145 +150,159 @@ def fetch_ohlcv(symbol, timeframe, limit):
         print(f"Error fetching OHLCV for {symbol}: {e}")
         return None
 
-# Function to fetch position mode (using CCXT)
-def get_position_mode(symbol):
+# Function to calculate quantity
+def calculate_quantity(symbol, latest_close):
+    min_amount = symbols_info.get(symbol, 0.0001)
+    quantity = min_amount * 1.01
+    return quantity
+
+# Async function to check current position
+async def check_position(symbol):
     try:
-        positions = exchange.fetch_positions([symbol])
+        positions = await exchange.fetch_positions([symbol])
         for pos in positions:
-            if pos['symbol'] == symbol:
-                return 'one-way' if pos['info'].get('holdMode') == 'single_hold' else 'hedge'
-        return 'one-way'
+            if pos['symbol'] == symbol and float(pos['contracts']) > 0:
+                return pos['side'].lower(), float(pos['contracts'])
+        return None, 0
     except Exception as e:
-        print(f"Error fetching position mode for {symbol}: {e}")
-        return 'one-way'
+        print(f"Error checking position for {symbol}: {e}")
+        return None, 0
 
-# Function to place a market order (using Bitget SDK)
-def place_market_order(symbol, side, quantity, position_mode='one-way'):
-    try:
-        bitget_symbol = symbol.replace(':USDT', '_UMCBL')  # e.g., BTCUSDT_UMCBL
-        if position_mode == 'one-way':
-            trade_side = 'open_long' if side.lower() == 'buy' else 'open_short'
-        else:  # hedge mode
-            if side.lower() == 'buy':
-                trade_side = 'open_long' if last_order_types[symbol] != 'BUY' else 'close_short'
+# Async function to place a market buy order
+async def place_market_buy_order(symbol, quantity, order_num, trade_side='open', retries=2, delay=1):
+    attempt = 0
+    while attempt < retries:
+        try:
+            if not await set_trading_parameters(symbol):
+                raise Exception("Failed to set trading parameters")
+            latest_price = float((await exchange.fetch_ticker(symbol))['close'])
+            order_id = place_order_with_tp_sl(symbol, 'buy', trade_side, quantity, latest_price if trade_side == 'open' else None)
+            if order_id:
+                print(f"Order #{order_num} - Market Buy Order placed for {symbol}: {order_id}")
+                return order_id
             else:
-                trade_side = 'open_short' if last_order_types[symbol] != 'SELL' else 'close_long'
+                raise Exception("Order placement failed")
+        except Exception as e:
+            attempt += 1
+            print(f"Order #{order_num} - Error placing Market Buy Order for {symbol} (Attempt {attempt}/{retries}): {e}")
+            if attempt < retries:
+                await asyncio.sleep(delay)
+    return None
 
-        params = {
-            'symbol': bitget_symbol,
-            'marginCoin': 'USDT',
-            'side': trade_side,
-            'orderType': 'market',
-            'size': str(exchange.amount_to_precision(symbol, quantity)),
-            'clientOid': str(int(time.time() * 1000)),
-        }
+# Async function to place a market sell order
+async def place_market_sell_order(symbol, quantity, order_num, trade_side='open', retries=2, delay=1):
+    attempt = 0
+    while attempt < retries:
+        try:
+            if not await set_trading_parameters(symbol):
+                raise Exception("Failed to set trading parameters")
+            latest_price = float((await exchange.fetch_ticker(symbol))['close'])
+            order_id = place_order_with_tp_sl(symbol, 'sell', trade_side, quantity, latest_price if trade_side == 'open' else None)
+            if order_id:
+                print(f"Order #{order_num} - Market Sell Order placed for {symbol}: {order_id}")
+                return order_id
+            else:
+                raise Exception("Order placement failed")
+        except Exception as e:
+            attempt += 1
+            print(f"Order #{order_num} - Error placing Market Sell Order for {symbol} (Attempt {attempt}/{retries}): {e}")
+            if attempt < retries:
+                await asyncio.sleep(delay)
+    return None
 
-        print(f"Placing market order for {symbol}: {params}")
-        response = bitget_order_client.placeOrder(params)
-        print(f"Market {side.capitalize()} Order placed for {symbol}: {response}")
-        return response if response['code'] == '00000' else None
-    except BitgetAPIException as e:
-        print(f"Error placing Market {side.capitalize()} Order for {symbol}: {e.message}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error placing order for {symbol}: {type(e).__name__} - {str(e)}")
-        return None
-
-# Function to close an existing position (using Bitget SDK)
-def close_existing_position(symbol, position_mode='one-way'):
+# Async function to cancel an open order
+async def cancel_open_order(symbol, order_id):
     try:
-        positions = exchange.fetch_positions([symbol])
-        for position in positions:
-            if position['symbol'] == symbol:
-                position_size = float(position.get('contracts', 0) or 0)
-                position_side = position.get('side', '').lower()
-
-                if position_size > 0:
-                    close_side = 'close_long' if position_side == 'long' else 'close_short'
-                    print(f"Closing existing {position_side} position for {symbol} with size {position_size}")
-                    bitget_symbol = symbol.replace(':USDT', '_UMCBL')
-                    params = {
-                        'symbol': bitget_symbol,
-                        'marginCoin': 'USDT',
-                        'side': close_side,
-                        'orderType': 'market',
-                        'size': str(position_size),
-                        'clientOid': str(int(time.time() * 1000)),
-                    }
-                    response = bitget_order_client.placeOrder(params)
-                    return response['code'] == '00000'
-        print(f"No existing position for {symbol} to close")
-        return True
-    except BitgetAPIException as e:
-        print(f"Error closing position for {symbol}: {e.message}")
-        return False
+        if order_id:
+            await exchange.cancel_order(order_id, symbol)
+            print(f"Cancelled open order for {symbol}: {order_id}")
     except Exception as e:
-        print(f"Unexpected error closing position for {symbol}: {e}")
-        return False
+        print(f"Error cancelling order for {symbol}: {e}")
 
-# Function to close open orders (using CCXT)
-def close_open_orders(symbol):
-    try:
-        if open_orders[symbol] and 'id' in open_orders[symbol]:
-            exchange.cancel_order(open_orders[symbol]['id'], symbol=symbol)
-            print(f"Cancelled open order for {symbol}: {open_orders[symbol]['id']}")
-            open_orders[symbol] = None
-    except Exception as e:
-        print(f"Error cancelling open order for {symbol}: {e}")
-
-# Main trading function
-def ema_strategy():
-    exchange.load_markets()
-    print("Available markets:", [s for s in exchange.markets.keys() if 'USDT' in s])
-
+# Main async trading function with MACD strategy
+async def ema_strategy():
+    global symbols, symbols_info, last_order_types, open_orders, last_signals
+    
     while True:
         try:
-            for symbol in symbols:
-                position_mode = get_position_mode(symbol)
-                print(f"{symbol} Position Mode: {position_mode}")
+            symbols_info = fetch_bitget_symbols()
+            symbols = list(symbols_info.keys())
+            
+            last_order_types = {symbol: last_order_types.get(symbol) for symbol in symbols}
+            open_orders = {symbol: open_orders.get(symbol) for symbol in symbols}
+            last_signals = {symbol: last_signals.get(symbol) for symbol in symbols}
+            
+            trades_placed = 0
 
-                historical_data = fetch_ohlcv(symbol, time_interval, 100)
-                if historical_data is None or len(historical_data) < long_ema_period:
-                    print(f"Not enough data for {symbol}. Waiting for more data...")
+            for i, symbol in enumerate(symbols, 1):
+                print(f"\nProcessing pair #{i}/{len(symbols)}: {symbol}")
+                
+                historical_data = await fetch_ohlcv(symbol, time_interval, 100)
+                if historical_data is None or len(historical_data) < 26:
+                    print(f"Not enough data for {symbol}. Skipping...")
                     continue
 
-                latest_candle = exchange.fetch_ticker(symbol)
-                if 'close' not in latest_candle or latest_candle['close'] is None:
-                    print(f"Error: Invalid latest candle data for {symbol}")
-                    continue
-
+                latest_candle = await exchange.fetch_ticker(symbol)
                 latest_close = float(latest_candle['close'])
-                quantity = fixed_quantity_usdt / latest_close
-                print(f"Symbol: {symbol}, Latest Close: {latest_close:.2f}, Quantity: {quantity:.8f}")
+                quantity = calculate_quantity(symbol, latest_close)
 
-                latest_short_ema = historical_data['short_ema'].iloc[-1]
-                latest_long_ema = historical_data['long_ema'].iloc[-1]
+                current_histogram = historical_data['macd'].iloc[-2]
+                prev_histogram = historical_data['macd'].iloc[-3]
+                
+                if current_histogram > prev_histogram:
+                    current_signal = 'long'
+                    print(f'{symbol} Potential Buy Signal')
+                elif current_histogram < prev_histogram:
+                    current_signal = 'short'
+                    print(f'{symbol} Potential Sell Signal')
+                else:
+                    current_signal = None
+                    print(f'{symbol} No clear signal')
+                    continue
 
-                if latest_short_ema > latest_long_ema and last_order_types[symbol] != 'BUY':
-                    print(f'{symbol} Buy Signal (Crossover)')
-                    if last_order_types[symbol] == 'SELL' and not close_existing_position(symbol, position_mode):
-                        print(f"Skipping buy order for {symbol} due to close failure")
-                        continue
-                    close_open_orders(symbol)
-                    open_orders[symbol] = place_market_order(symbol, 'buy', quantity, position_mode)
-                    if open_orders[symbol]:
-                        last_order_types[symbol] = 'BUY'
+                if current_signal and last_signals.get(symbol) != current_signal:
+                    position_side, position_size = await check_position(symbol)
+                    if position_side:
+                        if (current_signal == 'long' and position_side == 'short') or \
+                           (current_signal == 'short' and position_side == 'long'):
+                            trades_placed += 1
+                            if position_side == 'short':
+                                close_order_id = await place_market_buy_order(symbol, position_size, trades_placed, 'close')
+                            else:
+                                close_order_id = await place_market_sell_order(symbol, position_size, trades_placed, 'close')
+                            if close_order_id and open_orders.get(symbol):
+                                await cancel_open_order(symbol, open_orders[symbol])
+                                open_orders[symbol] = None
+                                last_order_types[symbol] = None
 
-                elif latest_short_ema < latest_long_ema and last_order_types[symbol] != 'SELL':
-                    print(f'{symbol} Sell Signal (Crossunder)')
-                    if last_order_types[symbol] == 'BUY' and not close_existing_position(symbol, position_mode):
-                        print(f"Skipping sell order for {symbol} due to close failure")
-                        continue
-                    close_open_orders(symbol)
-                    open_orders[symbol] = place_market_order(symbol, 'sell', quantity, position_mode)
-                    if open_orders[symbol]:
-                        last_order_types[symbol] = 'SELL'
+                    last_signals[symbol] = current_signal
+                    
+                    if current_signal == 'long':
+                        trades_placed += 1
+                        order_id = await place_market_buy_order(symbol, quantity, trades_placed, 'open')
+                        if order_id:
+                            open_orders[symbol] = order_id
+                            last_order_types[symbol] = 'BUY'
+                    elif current_signal == 'short':
+                        trades_placed += 1
+                        order_id = await place_market_sell_order(symbol, quantity, trades_placed, 'open')
+                        if order_id:
+                            open_orders[symbol] = order_id
+                            last_order_types[symbol] = 'SELL'
 
-            time.sleep(300)  # Wait 5 minutes
+            print(f"\nCycle completed. Total trades placed: {trades_placed}")
+            await asyncio.sleep(900)  # 30 minutes
+            
         except Exception as e:
-            print(f'An error occurred in main loop: {e}')
-            time.sleep(60)
+            print(f'An error occurred in cycle: {e}')
+            await asyncio.sleep(60)
 
 # Run the trading strategy
+async def main():
+    if symbols:
+        await ema_strategy()
+    else:
+        print("No symbols available to trade. Exiting...")
+
 if __name__ == "__main__":
-    ema_strategy()
+    asyncio.run(main())
