@@ -21,21 +21,25 @@ trading_params = {
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
 
-# Fetch symbols dynamically from Bitget API
-def fetch_bitget_symbols():
-    url = f"{BASE_URL}/api/v2/mix/market/tickers"
+# Function to fetch USDT trading pairs dynamically
+def get_usdt_pairs():
+    url = "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
     try:
         response = requests.get(url)
-        response.raise_for_status()
+        response.raise_for_status()  # Check for HTTP errors
+        
         data = response.json()
-        symbols_info = {
-            s['symbol']: float(s['minTradeAmount'])
-            for s in data['data']
-            if s['quoteCoin'] == 'USDT' and s['state'] == 'open'
-        }
-        return symbols_info
+
+        # Ensure 'data' is present and is a list
+        if 'data' in data and isinstance(data['data'], list):
+            # Filter for USDT trading pairs
+            usdt_pairs = {item['symbol']: float(item['minTradeAmount']) for item in data['data'] if 'USDT' in item['symbol']}
+            return usdt_pairs
+        else:
+            print("Unexpected data format.")
+            return {}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching symbols from Bitget: {e}")
+        print(f"Error fetching USDT pairs from Bitget: {e}")
         return {}
 
 # Create a Bitget client
@@ -51,7 +55,7 @@ exchange = ccxt.bitget({
 macd_ema_period = 3
 
 # Get initial symbols and their min_amounts
-symbols_info = fetch_bitget_symbols()
+symbols_info = get_usdt_pairs()
 symbols = list(symbols_info.keys())
 
 # Track last order types, open orders, and last signals
@@ -225,7 +229,7 @@ async def ema_strategy():
     
     while True:
         try:
-            symbols_info = fetch_bitget_symbols()
+            symbols_info = get_usdt_pairs()
             symbols = list(symbols_info.keys())
             
             last_order_types = {symbol: last_order_types.get(symbol) for symbol in symbols}
