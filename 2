@@ -83,11 +83,17 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
     timestamp = str(int(time.time() * 1000))
     path = "/api/mix/v1/order/placeOrder"
     
+    # Determine correct side value for futures
+    if trade_side == 'open':
+        order_side = 'open_long' if side == 'buy' else 'open_short'
+    else:  # trade_side == 'close'
+        order_side = 'close_short' if side == 'buy' else 'close_long'
+
     # Calculate TP/SL prices based on trade direction
-    if side == 'buy' and trade_side == 'open':  # Long
+    if order_side == 'open_long':
         tp_price = str(round(entry_price * 1.01, 6)) if entry_price else None
         sl_price = str(round(entry_price * 0.98, 6)) if entry_price else None
-    elif side == 'sell' and trade_side == 'open':  # Short
+    elif order_side == 'open_short':
         tp_price = str(round(entry_price * 0.99, 6)) if entry_price else None
         sl_price = str(round(entry_price * 1.02, 6)) if entry_price else None
     else:  # Closing position
@@ -98,7 +104,7 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         "symbol": symbol,
         "marginCoin": "USDT",
         "size": str(quantity),
-        "side": side,
+        "side": order_side,  # Updated to use futures-specific side values
         "orderType": "market",
         "clientOid": f"{symbol}_{timestamp}"
     }
@@ -122,7 +128,7 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         data = response.json()
         if data.get('code') == "00000" and data.get('data') and isinstance(data['data'], list) and len(data['data']) > 0:
             order_id = data['data'][0]['orderId']
-            print(f"Order placed for {symbol}: {side}/{trade_side} - OrderId: {order_id}")
+            print(f"Order placed for {symbol}: {order_side} - OrderId: {order_id}")
             return order_id
         else:
             print(f"Failed to place order for {symbol}: {data.get('msg')}")
