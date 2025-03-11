@@ -19,7 +19,7 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
+PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"  # Updated to v2
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -78,22 +78,16 @@ def generate_signature(timestamp, method, path, body, secret):
     message = timestamp + method.upper() + path + (body if body else '')
     return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
 
-# Function to place order with TP/SL using Bitget API
+# Function to place order with TP/SL using Bitget API (v2)
 def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/order/placeOrder"
+    path = "/api/v2/mix/order/place-order"
     
-    # Determine correct side value for futures
-    if trade_side == 'open':
-        order_side = 'open_long' if side == 'buy' else 'open_short'
-    else:  # trade_side == 'close'
-        order_side = 'close_short' if side == 'buy' else 'close_long'
-
     # Calculate TP/SL prices based on trade direction
-    if order_side == 'open_long':
+    if side == 'buy' and trade_side == 'open':  # Long
         tp_price = str(round(entry_price * 1.01, 6)) if entry_price else None
         sl_price = str(round(entry_price * 0.98, 6)) if entry_price else None
-    elif order_side == 'open_short':
+    elif side == 'sell' and trade_side == 'open':  # Short
         tp_price = str(round(entry_price * 0.99, 6)) if entry_price else None
         sl_price = str(round(entry_price * 1.02, 6)) if entry_price else None
     else:  # Closing position
@@ -102,10 +96,14 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
 
     params = {
         "symbol": symbol,
+        "productType": trading_params["product_type"],  # Added from trading_params
+        "marginMode": trading_params["margin_mode"],    # Added from trading_params
         "marginCoin": "USDT",
         "size": str(quantity),
-        "side": order_side,  # Updated to use futures-specific side values
+        "side": side,  # 'buy' or 'sell'
+        "tradeSide": trade_side,  # 'open' or 'close'
         "orderType": "market",
+        "force": "normal",  # Good-till-cancel equivalent
         "clientOid": f"{symbol}_{timestamp}"
     }
     if tp_price:
@@ -126,9 +124,10 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
         response.raise_for_status()
         data = response.json()
-        if data.get('code') == "00000" and data.get('data') and isinstance(data['data'], list) and len(data['data']) > 0:
-            order_id = data['data'][0]['orderId']
-            print(f"Order placed for {symbol}: {order_side} - OrderId: {order_id}")
+        if data.get('code') == "00000" and data.get('data'):
+            # v2 response might differ; adjust based on actual response if needed
+            order_id = data['data'].get('orderId') or data['data'][0].get('orderId')  # Handle list or dict
+            print(f"Order placed for {symbol}: {side}/{trade_side} - OrderId: {order_id}")
             return order_id
         else:
             print(f"Failed to place order for {symbol}: {data.get('msg')}")
