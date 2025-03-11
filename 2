@@ -79,7 +79,7 @@ def generate_signature(timestamp, method, path, body, secret):
     return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
 
 # Function to place order with TP/SL using Bitget API
-def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None):
+def place_order_with_tp_sl(symbol, side, trade_side, quantity, policiy=None):
     timestamp = str(int(time.time() * 1000))
     path = "/api/mix/v1/order/placeOrder"
     
@@ -220,7 +220,7 @@ async def place_market_sell_order(symbol, quantity, order_num, trade_side='open'
     attempt = 0
     while attempt < retries:
         try:
-            if-FM not await set_trading_parameters(symbol, trade_side, 'sell'):
+            if not await set_trading_parameters(symbol, trade_side, 'sell'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
             order_id = place_order_with_tp_sl(symbol, 'sell', trade_side, quantity, latest_price if trade_side == 'open' else None)
