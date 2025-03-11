@@ -32,8 +32,19 @@ def get_usdt_pairs():
 
         # Ensure 'data' is present and is a list
         if 'data' in data and isinstance(data['data'], list):
-            # Filter for USDT trading pairs
-            usdt_pairs = {item['symbol']: float(item['minTradeAmount']) for item in data['data'] if 'USDT' in item['symbol']}
+            # Debug: Print the first item to inspect available fields
+            if data['data']:
+                print("Sample ticker data:", data['data'][0])
+            # Filter for USDT trading pairs, use 'minTradeAmount' or fallback to a default
+            usdt_pairs = {}
+            for item in data['data']:
+                if 'USDT' in item['symbol']:
+                    try:
+                        min_amount = float(item.get('minTradeAmount', 0.0001))  # Fallback to 0.0001 if missing
+                        usdt_pairs[item['symbol']] = min_amount
+                    except (ValueError, TypeError):
+                        print(f"Invalid minTradeAmount for {item['symbol']}: {item.get('minTradeAmount')}")
+                        usdt_pairs[item['symbol']] = 0.0001  # Default value
             return usdt_pairs
         else:
             print("Unexpected data format.")
@@ -87,7 +98,7 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
     params = {
         "symbol": symbol,
         "marginCoin": "USDT",
-        "size": str(quantity),  # Already updated to "size" as per previous request
+        "size": str(quantity),
         "side": side,
         "orderType": "market",
         "clientOid": f"{symbol}_{timestamp}"
@@ -111,7 +122,7 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         response.raise_for_status()
         data = response.json()
         if data.get('code') == "00000" and data.get('data') and isinstance(data['data'], list) and len(data['data']) > 0:
-            order_id = data['data'][0]['orderId']  # Updated to handle array response
+            order_id = data['data'][0]['orderId']
             print(f"Order placed for {symbol}: {side}/{trade_side} - OrderId: {order_id}")
             return order_id
         else:
