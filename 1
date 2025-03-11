@@ -19,7 +19,7 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
+PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"
 
 # Function to fetch USDT trading pairs dynamically
 def get_usdt_pairs():
@@ -71,9 +71,9 @@ def generate_signature(timestamp, method, path, body, secret):
 # Function to place order with TP/SL using Bitget API
 def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v2/mix/order/place-order"
+    path = "/api/mix/v1/order/placeOrder"
     
-    # Calculate TP/SL prices
+    # Calculate TP/SL prices based on trade direction
     if side == 'buy' and trade_side == 'open':  # Long
         tp_price = str(round(entry_price * 1.01, 6)) if entry_price else None
         sl_price = str(round(entry_price * 0.98, 6)) if entry_price else None
@@ -86,17 +86,14 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
 
     params = {
         "symbol": symbol,
-        "productType": trading_params["product_type"],
-        "marginMode": trading_params["margin_mode"],
         "marginCoin": "USDT",
-        "size": str(quantity),
+        "size": str(quantity),  # Already updated to "size" as per previous request
         "side": side,
-        "tradeSide": trade_side,
         "orderType": "market",
         "clientOid": f"{symbol}_{timestamp}"
     }
     if tp_price:
-        params["presetStopSurplusPrice"] = tp_price
+        params["presetTakeProfitPrice"] = tp_price
     if sl_price:
         params["presetStopLossPrice"] = sl_price
 
@@ -113,9 +110,10 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
         response.raise_for_status()
         data = response.json()
-        if data.get('code') == "00000":
-            print(f"Order placed for {symbol}: {side}/{trade_side} - OrderId: {data['data']['orderId']}")
-            return data['data']['orderId']
+        if data.get('code') == "00000" and data.get('data') and isinstance(data['data'], list) and len(data['data']) > 0:
+            order_id = data['data'][0]['orderId']  # Updated to handle array response
+            print(f"Order placed for {symbol}: {side}/{trade_side} - OrderId: {order_id}")
+            return order_id
         else:
             print(f"Failed to place order for {symbol}: {data.get('msg')}")
             return None
