@@ -14,12 +14,13 @@ trading_params = {
     "market_type": "swap",
     "margin_mode": "isolated",
     "leverage": 3,
-    "product_type": "umcbl"  # Updated to match API parameter
+    "product_type": "umcbl"  # USDT-margined perpetual futures
 }
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"
+# Uses productType=umcbl for USDT-margined perpetual futures, not a contract name
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts?productType=umcbl"
 
 # Function to fetch USDT trading pairs dynamically
