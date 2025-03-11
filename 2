@@ -79,7 +79,7 @@ def generate_signature(timestamp, method, path, body, secret):
     return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
 
 # Function to place order with TP/SL using Bitget API
-def place_order_with_tp_sl(symbol, side, trade_side, quantity, policiy=None):
+def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None):
     timestamp = str(int(time.time() * 1000))
     path = "/api/mix/v1/order/placeOrder"
     
