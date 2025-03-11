@@ -24,7 +24,7 @@ CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
-    url = f"{CONTRACTS_URL}?productType=umcbl"  # Using 'umcbl' as a generic type per example
+    url = f"{CONTRACTS_URL}?productType=umcbl"
     try:
         response = requests.get(url)
         response.raise_for_status()  # Check for HTTP errors
@@ -39,7 +39,7 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        symbol = item['symbol'].replace('_UMCBL', '')  # Strip UMCBL for simplicity
+                        symbol = item['symbol'].replace('_UMCBL', '')
                         usdt_pairs[symbol] = min_trade_num
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
@@ -132,10 +132,15 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         return None
 
 # Async function to set trading parameters
-async def set_trading_parameters(symbol, trade_side):
+async def set_trading_parameters(symbol, trade_side, side):
     try:
-        # Bitget requires holdSide in double_hold mode
-        hold_side = 'long' if trade_side == 'open' and 'buy' in last_order_types.get(symbol, '').lower() else 'short'
+        # Determine holdSide based on current trade direction if opening, or last order if closing
+        if trade_side == 'open':
+            hold_side = 'long' if side == 'buy' else 'short'
+        else:  # Closing position
+            last_order = last_order_types.get(symbol)
+            hold_side = 'short' if last_order == 'BUY' else 'long'  # Opposite of opening side
+        
         await exchange.set_leverage(
             trading_params['leverage'], 
             symbol, 
@@ -194,7 +199,7 @@ async def place_market_buy_order(symbol, quantity, order_num, trade_side='open',
     attempt = 0
     while attempt < retries:
         try:
-            if not await set_trading_parameters(symbol, trade_side):
+            if not await set_trading_parameters(symbol, trade_side, 'buy'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
             order_id = place_order_with_tp_sl(symbol, 'buy', trade_side, quantity, latest_price if trade_side == 'open' else None)
@@ -215,7 +220,7 @@ async def place_market_sell_order(symbol, quantity, order_num, trade_side='open'
     attempt = 0
     while attempt < retries:
         try:
-            if not await set_trading_parameters(symbol, trade_side):
+            if-FM not await set_trading_parameters(symbol, trade_side, 'sell'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
             order_id = place_order_with_tp_sl(symbol, 'sell', trade_side, quantity, latest_price if trade_side == 'open' else None)
