@@ -22,9 +22,9 @@ BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
-# Function to fetch USDT trading pairs dynamically
+# Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
-    url = CONTRACTS_URL
+    url = f"{CONTRACTS_URL}?productType=umcbl"  # Using 'umcbl' as a generic type per example
     try:
         response = requests.get(url)
         response.raise_for_status()  # Check for HTTP errors
@@ -33,14 +33,16 @@ def get_usdt_pairs():
 
         # Ensure 'data' is present and is a list
         if 'data' in data and isinstance(data['data'], list):
+            # Fetch symbols and minTradeNum
             usdt_pairs = {}
             for item in data['data']:
-                if item['quoteCoin'] == 'USDT':  # Filter for USDT pairs
+                if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        usdt_pairs[item['symbol']] = min_trade_num
-                    except (ValueError, TypeError, KeyError) as e:
-                        print(f"Invalid minTradeNum for {item['symbol']}: {item.get('minTradeNum')}, error: {e}")
+                        symbol = item['symbol'].replace('_UMCBL', '')  # Strip UMCBL for simplicity
+                        usdt_pairs[symbol] = min_trade_num
+                    except (KeyError, ValueError) as e:
+                        print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
                         usdt_pairs[item['symbol']] = 0.0001  # Fallback
             return usdt_pairs
         else:
