@@ -25,14 +25,12 @@ trading_params = {
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
-PLACE_POSITIONS_TPSL_URL = f"{BASE_URL}/api/mix/v1/plan/placePositionsTPSL"  # Updated TP/SL endpoint
+PLACE_POSITIONS_TPSL_URL = f"{BASE_URL}/api/mix/v1/plan/placePositionsTPSL"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
-    url =   
-
- f"{CONTRACTS_URL}?productType=umcbl"
+    url = f"{CONTRACTS_URL}?productType=umcbl"
     try:
         response = requests.get(url)
         response.raise_for_status()
