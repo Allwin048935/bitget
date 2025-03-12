@@ -16,8 +16,8 @@ trading_params = {
     "margin_mode": "isolated",
     "leverage": 3,
     "product_type": "USDT-FUTURES",
-    "tp_trigger_type": "mark_price",  # Maps to market_price in API
-    "sl_trigger_type": "mark_price",  # Maps to market_price in API
+    "tp_trigger_type": "mark_price",
+    "sl_trigger_type": "mark_price",
     "tp_percentage": 5,
     "sl_percentage": 2
 }
@@ -139,7 +139,7 @@ def place_positions_tpsl(base_symbol, hold_side, plan_type, trigger_price):
     
     params = {
         "marginCoin": "USDT",
-        "symbol": full_symbol,  # e.g., BTCUSDT_UMCBL
+        "symbol": full_symbol,
         "planType": plan_type,  # pos_profit or pos_loss
         "triggerPrice": str(trigger_price),
         "triggerType": trading_params["tp_trigger_type"] if plan_type == "pos_profit" else trading_params["sl_trigger_type"],
@@ -251,8 +251,10 @@ async def place_market_buy_order(base_symbol, quantity, order_num, trade_side='o
             if order_id and trade_side == 'open':
                 tp_price = latest_price * (1 + trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 - trading_params['sl_percentage'] / 100)
-                place_positions_tpsl(base_symbol, 'long', 'pos_profit', tp_price)
-                place_positions_tpsl(base_symbol, 'long', 'pos_loss', sl_price)
+                tp_order_id = place_positions_tpsl(base_symbol, 'long', 'pos_profit', tp_price)
+                sl_order_id = place_positions_tpsl(base_symbol, 'long', 'pos_loss', sl_price)
+                if not tp_order_id or not sl_order_id:
+                    raise Exception(f"Failed to set TP ({tp_order_id}) or SL ({sl_order_id}) for {base_symbol}")
                 print(f"Order #{order_num} - Market Buy Order with TP/SL placed for {base_symbol}: {order_id}")
             elif order_id:
                 print(f"Order #{order_num} - Market Buy Order placed for {base_symbol}: {order_id}")
@@ -276,8 +278,10 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
             if order_id and trade_side == 'open':
                 tp_price = latest_price * (1 - trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 + trading_params['sl_percentage'] / 100)
-                place_positions_tpsl(base_symbol, 'short', 'pos_profit', tp_price)
-                place_positions_tpsl(base_symbol, 'short', 'pos_loss', sl_price)
+                tp_order_id = place_positions_tpsl(base_symbol, 'short', 'pos_profit', tp_price)
+                sl_order_id = place_positions_tpsl(base_symbol, 'short', 'pos_loss', sl_price)
+                if not tp_order_id or not sl_order_id:
+                    raise Exception(f"Failed to set TP ({tp_order_id}) or SL ({sl_order_id}) for {base_symbol}")
                 print(f"Order #{order_num} - Market Sell Order with TP/SL placed for {base_symbol}: {order_id}")
             elif order_id:
                 print(f"Order #{order_num} - Market Sell Order placed for {base_symbol}: {order_id}")
@@ -289,14 +293,23 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
                 await asyncio.sleep(delay)
     return None
 
-# Async function to cancel an open order
-async def cancel_open_order(base_symbol, order_id):
+# Async function to close an existing position
+async def close_position(base_symbol, position_side, position_size, order_num):
     try:
-        if order_id:
-            await exchange.cancel_order(order_id, base_symbol)
-            print(f"Cancelled open order for {base_symbol}: {order_id}")
+        if position_side == 'long':
+            close_order_id = await place_market_sell_order(base_symbol, position_size, order_num, 'close')
+        else:  # short
+            close_order_id = await place_market_buy_order(base_symbol, position_size, order_num, 'close')
+        
+        if close_order_id:
+            print(f"Closed existing {position_side} position for {base_symbol}: OrderId {close_order_id}")
+            return True
+        else:
+            print(f"Failed to close existing {position_side} position for {base_symbol}")
+            return False
     except Exception as e:
-        print(f"Error cancelling order for {base_symbol}: {e}")
+        print(f"Error closing position for {base_symbol}: {e}")
+        return False
 
 # Main async trading function with MACD strategy
 async def ema_strategy():
@@ -345,14 +358,12 @@ async def ema_strategy():
                         if (current_signal == 'long' and position_side == 'short') or \
                            (current_signal == 'short' and position_side == 'long'):
                             trades_placed += 1
-                            if position_side == 'short':
-                                close_order_id = await place_market_buy_order(base_symbol, position_size, trades_placed, 'close')
-                            else:
-                                close_order_id = await place_market_sell_order(base_symbol, position_size, trades_placed, 'close')
-                            if close_order_id and open_orders.get(base_symbol):
-                                await cancel_open_order(base_symbol, open_orders[base_symbol])
+                            if await close_position(base_symbol, position_side, position_size, trades_placed):
                                 open_orders[base_symbol] = None
                                 last_order_types[base_symbol] = None
+                            else:
+                                print(f"Skipping new position for {base_symbol} due to failure closing existing position")
+                                continue
 
                     last_signals[base_symbol] = current_signal
                     
