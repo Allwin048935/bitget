@@ -27,7 +27,6 @@ BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
 PLACE_TPSL_URL = f"{BASE_URL}/api/v2/mix/order/place-tpsl-order"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
-ACCOUNT_URL = f"{BASE_URL}/api/v2/mix/account/accounts"  # For testing credentials
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
@@ -42,8 +41,8 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        full_symbol = item['symbol']
-                        base_symbol = item['symbol'].split('_')[0]
+                        full_symbol = item['symbol']  # e.g., BTCUSDT_UMCBL
+                        base_symbol = item['symbol'].split('_')[0]  # e.g., BTCUSDT
                         usdt_pairs[base_symbol] = {'full_symbol': full_symbol, 'min_amount': min_trade_num}
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
@@ -90,10 +89,11 @@ def generate_signature(timestamp, method, path, query_string="", body="", secret
 def place_order(base_symbol, side, trade_side, quantity):
     timestamp = str(int(time.time() * 1000))
     path = "/api/v2/mix/order/place-order"
-    full_symbol = symbols_info[base_symbol]['full_symbol']
+    # Use base_symbol instead of full_symbol for v2 API
+    symbol = base_symbol  # e.g., BTCUSDT
     
     params = {
-        "symbol": full_symbol,
+        "symbol": symbol,
         "productType": trading_params["product_type"],
         "marginMode": trading_params["margin_mode"],
         "marginCoin": "USDT",
@@ -140,12 +140,13 @@ def place_order(base_symbol, side, trade_side, quantity):
 def place_tpsl_order(base_symbol, hold_side, quantity, entry_price, plan_type, trigger_price):
     timestamp = str(int(time.time() * 1000))
     path = "/api/v2/mix/order/place-tpsl-order"
-    full_symbol = symbols_info[base_symbol]['full_symbol']
+    # Use base_symbol instead of full_symbol for v2 API
+    symbol = base_symbol
     
     params = {
         "marginCoin": "USDT",
         "productType": trading_params["product_type"],
-        "symbol": full_symbol,
+        "symbol": symbol,
         "planType": plan_type,
         "triggerPrice": str(trigger_price),
         "triggerType": trading_params["tp_trigger_type"] if plan_type == "profit_plan" else trading_params["sl_trigger_type"],
@@ -165,6 +166,8 @@ def place_tpsl_order(base_symbol, hold_side, quantity, entry_price, plan_type, t
 
     try:
         response = requests.post(PLACE_TPSL_URL, headers=headers, data=body)
+        print(f"Response status: {response.status_code}")
+        print(f"Response body: {response.text}")
         response.raise_for_status()
         data = response.json()
         if data.get('code') == "00000" and data.get('data'):
