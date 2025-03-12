@@ -26,6 +26,7 @@ trading_params = {
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
+CLOSE_POSITIONS_URL = f"{BASE_URL}/api/v2/mix/order/close-positions"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
@@ -40,12 +41,12 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        full_symbol = item['symbol']  # e.g., BTCUSDT_UMCBL
-                        base_symbol = item['symbol'].split('_')[0]  # e.g., BTCUSDT
+                        full_symbol = item['symbol']
+                        base_symbol = item['symbol'].split('_')[0]
                         usdt_pairs[base_symbol] = {
                             'full_symbol': full_symbol,
                             'min_amount': min_trade_num,
-                            'size_precision': int(item.get('sizePrecision', 6))  # Default to 6 if not provided
+                            'size_precision': int(item.get('sizePrecision', 6))
                         }
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
@@ -93,7 +94,6 @@ def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price
     path = "/api/v2/mix/order/place-order"
     symbol = base_symbol
     
-    # Adjust quantity precision based on contract config
     precision = symbols_info[base_symbol].get('size_precision', 6)
     quantity = round(quantity, precision)
     
@@ -215,6 +215,63 @@ async def check_position(base_symbol):
         print(f"Error checking position for {base_symbol}: {e}")
         return None, 0
 
+# Async function to close an existing position using flash close
+async def close_position(base_symbol, position_side, position_size, order_num):
+    try:
+        timestamp = str(int(time.time() * 1000))
+        path = "/api/v2/mix/order/close-positions"
+        
+        params = {
+            "symbol": base_symbol,
+            "productType": trading_params["product_type"],
+            "holdSide": position_side  # 'long' or 'short'
+        }
+        
+        body = json.dumps(params, separators=(',', ':'))
+        headers = {
+            "ACCESS-KEY": BITGET_API_KEY,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+            "Content-Type": "application/json",
+            "ACCESS-SIGN": generate_signature(timestamp, "POST", path, body)
+        }
+
+        print(f"Closing position request for {base_symbol}: {params}")
+        
+        response = requests.post(CLOSE_POSITIONS_URL, headers=headers, data=body)
+        print(f"Raw response for closing {base_symbol}: {response.text}")
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('code') == "00000" and data.get('data'):
+            success_list = data['data'].get('successList', [])
+            failure_list = data['data'].get('failureList', [])
+            
+            if success_list:
+                order_id = success_list[0].get('orderId')
+                print(f"Order #{order_num} - Successfully closed {position_side} position for {base_symbol}: OrderId {order_id}")
+                return True
+            elif failure_list:
+                error_msg = failure_list[0].get('errorMsg', 'Unknown error')
+                print(f"Order #{order_num} - Failed to close {position_side} position for {base_symbol}: {error_msg}")
+                return False
+            else:
+                print(f"Order #{order_num} - Unexpected response format for {base_symbol}")
+                return False
+        else:
+            print(f"Order #{order_num} - API error closing position for {base_symbol}: {data.get('msg', 'No message')}")
+            return False
+            
+    except requests.exceptions.RequestException as e:
+        response_text = e.response.text if e.response else "No response body"
+        status_code = e.response.status_code if e.response else "Unknown"
+        print(f"Order #{order_num} - Error closing position for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
+        return False
+    except Exception as e:
+        print(f"Order #{order_num} - Unexpected error closing position for {base_symbol}: {e}")
+        return False
+
 # Async function to place a market buy order with TP/SL
 async def place_market_buy_order(base_symbol, quantity, order_num, trade_side='open', retries=2, delay=1):
     attempt = 0
@@ -266,24 +323,6 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
             if attempt < retries:
                 await asyncio.sleep(delay)
     return None
-
-# Async function to close an existing position
-async def close_position(base_symbol, position_side, position_size, order_num):
-    try:
-        if position_side == 'long':
-            close_order_id = await place_market_sell_order(base_symbol, position_size, order_num, 'close')
-        else:  # short
-            close_order_id = await place_market_buy_order(base_symbol, position_size, order_num, 'close')
-        
-        if close_order_id:
-            print(f"Closed existing {position_side} position for {base_symbol}: OrderId {close_order_id}")
-            return True
-        else:
-            print(f"Failed to close existing {position_side} position for {base_symbol}")
-            return False
-    except Exception as e:
-        print(f"Error closing position for {base_symbol}: {e}")
-        return False
 
 # Main async trading function with MACD strategy
 async def ema_strategy():
