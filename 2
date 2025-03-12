@@ -29,10 +29,11 @@ CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
-    url = f"{CONTRACTS_URL}?productType=usdt-futures"  # Changed from umcbl to usdt-futures
+    url = f"{CONTRACTS_URL}?productType=umcbl"  # Use umcbl as per your correction
     try:
         response = requests.get(url)
         response.raise_for_status()
+        
         data = response.json()
         if 'data' in data and isinstance(data['data'], list):
             usdt_pairs = {}
@@ -40,7 +41,7 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        # Strip _UMCBL or similar suffix if present, keep base symbol (e.g., ETHUSDT)
+                        # Strip _UMCBL suffix to get base symbol (e.g., XLMUSDT)
                         symbol = item['symbol'].split('_')[0]
                         usdt_pairs[symbol] = min_trade_num
                     except (KeyError, ValueError) as e:
