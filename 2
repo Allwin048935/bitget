@@ -14,12 +14,17 @@ trading_params = {
     "market_type": "swap",
     "margin_mode": "isolated",
     "leverage": 3,
-    "product_type": "USDT-FUTURES"
+    "product_type": "USDT-FUTURES",
+    "tp_trigger_type": "mark_price",  # Use mark_price for TP/SL triggering
+    "sl_trigger_type": "mark_price",
+    "tp_percentage": 5,  # 5% take profit
+    "sl_percentage": 2   # 2% stop loss
 }
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
+PLACE_TPSL_URL = f"{BASE_URL}/api/v2/mix/order/place-tpsl-order"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -28,7 +33,6 @@ def get_usdt_pairs():
     try:
         response = requests.get(url)
         response.raise_for_status()
-        
         data = response.json()
         if 'data' in data and isinstance(data['data'], list):
             usdt_pairs = {}
@@ -36,7 +40,6 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        # Use full symbol (e.g., XLMUSDT_UMCBL) instead of stripping _UMCBL
                         symbol = item['symbol']
                         usdt_pairs[symbol] = min_trade_num
                     except (KeyError, ValueError) as e:
@@ -76,14 +79,13 @@ def generate_signature(timestamp, method, path, body, secret):
     message = timestamp + method.upper() + path + (body if body else '')
     return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
 
-# Function to place order with TP/SL using Bitget API (v2)
-def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None):
+# Function to place market order (no TP/SL here)
+def place_order(symbol, side, trade_side, quantity):
     timestamp = str(int(time.time() * 1000))
     path = "/api/v2/mix/order/place-order"
     
-    # Simplified: Remove TP/SL for now to isolate the issue
     params = {
-        "symbol": symbol,  # Now uses full symbol like XLMUSDT_UMCBL
+        "symbol": symbol,
         "productType": trading_params["product_type"],
         "marginMode": trading_params["margin_mode"],
         "marginCoin": "USDT",
@@ -91,7 +93,7 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
         "side": side,  # 'buy' or 'sell'
         "tradeSide": trade_side,  # 'open' or 'close'
         "orderType": "market",
-        "force": "ioc"  # Changed to 'ioc' for immediate execution
+        "force": "ioc",
         "clientOid": f"{symbol}_{timestamp}"
     }
 
@@ -117,6 +119,48 @@ def place_order_with_tp_sl(symbol, side, trade_side, quantity, entry_price=None)
             return None
     except requests.exceptions.RequestException as e:
         print(f"Error placing order for {symbol}: {e}")
+        return None
+
+# Function to place TP/SL order
+def place_tpsl_order(symbol, hold_side, quantity, entry_price, plan_type, trigger_price):
+    timestamp = str(int(time.time() * 1000))
+    path = "/api/v2/mix/order/place-tpsl-order"
+    
+    params = {
+        "marginCoin": "USDT",
+        "productType": trading_params["product_type"],
+        "symbol": symbol,
+        "planType": plan_type,  # 'profit_plan' or 'loss_plan'
+        "triggerPrice": str(trigger_price),
+        "triggerType": trading_params["tp_trigger_type"] if plan_type == "profit_plan" else trading_params["sl_trigger_type"],
+        "executePrice": "0",  # Market price execution
+        "holdSide": hold_side,  # 'long' or 'short'
+        "size": str(quantity),
+        "clientOid": f"{symbol}_{plan_type}_{timestamp}"
+    }
+
+    body = json.dumps(params)
+    headers = {
+        "ACCESS-KEY": BITGET_API_KEY,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+        "Content-Type": "application/json",
+        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, body, BITGET_API_SECRET)
+    }
+
+    try:
+        response = requests.post(PLACE_TPSL_URL, headers=headers, data=body)
+        response.raise_for_status()
+        data = response.json()
+        if data.get('code') == "00000" and data.get('data'):
+            order_id = data['data'].get('orderId')
+            print(f"{plan_type.capitalize()} order placed for {symbol}: Trigger {trigger_price} - OrderId: {order_id}")
+            return order_id
+        else:
+            print(f"Failed to place {plan_type} for {symbol}: {data.get('msg', 'No error message provided')}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error placing {plan_type} for {symbol}: {e}")
         return None
 
 # Async function to set trading parameters
@@ -181,7 +225,7 @@ async def check_position(symbol):
         print(f"Error checking position for {symbol}: {e}")
         return None, 0
 
-# Async function to place a market buy order
+# Async function to place a market buy order with TP/SL
 async def place_market_buy_order(symbol, quantity, order_num, trade_side='open', retries=2, delay=1):
     attempt = 0
     while attempt < retries:
@@ -189,12 +233,17 @@ async def place_market_buy_order(symbol, quantity, order_num, trade_side='open',
             if not await set_trading_parameters(symbol, trade_side, 'buy'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
-            order_id = place_order_with_tp_sl(symbol, 'buy', trade_side, quantity, latest_price if trade_side == 'open' else None)
-            if order_id:
+            order_id = place_order(symbol, 'buy', trade_side, quantity)
+            if order_id and trade_side == 'open':
+                # Set TP/SL for long position
+                tp_price = latest_price * (1 + trading_params['tp_percentage'] / 100)
+                sl_price = latest_price * (1 - trading_params['sl_percentage'] / 100)
+                place_tpsl_order(symbol, 'long', quantity, latest_price, 'profit_plan', tp_price)
+                place_tpsl_order(symbol, 'long', quantity, latest_price, 'loss_plan', sl_price)
+                print(f"Order #{order_num} - Market Buy Order with TP/SL placed for {symbol}: {order_id}")
+            elif order_id:
                 print(f"Order #{order_num} - Market Buy Order placed for {symbol}: {order_id}")
-                return order_id
-            else:
-                raise Exception("Order placement failed")
+            return order_id
         except Exception as e:
             attempt += 1
             print(f"Order #{order_num} - Error placing Market Buy Order for {symbol} (Attempt {attempt}/{retries}): {e}")
@@ -202,7 +251,7 @@ async def place_market_buy_order(symbol, quantity, order_num, trade_side='open',
                 await asyncio.sleep(delay)
     return None
 
-# Async function to place a market sell order
+# Async function to place a market sell order with TP/SL
 async def place_market_sell_order(symbol, quantity, order_num, trade_side='open', retries=2, delay=1):
     attempt = 0
     while attempt < retries:
@@ -210,12 +259,17 @@ async def place_market_sell_order(symbol, quantity, order_num, trade_side='open'
             if not await set_trading_parameters(symbol, trade_side, 'sell'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
-            order_id = place_order_with_tp_sl(symbol, 'sell', trade_side, quantity, latest_price if trade_side == 'open' else None)
-            if order_id:
+            order_id = place_order(symbol, 'sell', trade_side, quantity)
+            if order_id and trade_side == 'open':
+                # Set TP/SL for short position
+                tp_price = latest_price * (1 - trading_params['tp_percentage'] / 100)
+                sl_price = latest_price * (1 + trading_params['sl_percentage'] / 100)
+                place_tpsl_order(symbol, 'short', quantity, latest_price, 'profit_plan', tp_price)
+                place_tpsl_order(symbol, 'short', quantity, latest_price, 'loss_plan', sl_price)
+                print(f"Order #{order_num} - Market Sell Order with TP/SL placed for {symbol}: {order_id}")
+            elif order_id:
                 print(f"Order #{order_num} - Market Sell Order placed for {symbol}: {order_id}")
-                return order_id
-            else:
-                raise Exception("Order placement failed")
+            return order_id
         except Exception as e:
             attempt += 1
             print(f"Order #{order_num} - Error placing Market Sell Order for {symbol} (Attempt {attempt}/{retries}): {e}")
