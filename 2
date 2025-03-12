@@ -24,9 +24,7 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
-PLACE_POSITIONS_TPSL_URL = f"{BASE_URL}/api/mix/v1/plan/placePositionsTPSL"
-CANCEL_PLAN_URL = f"{BASE_URL}/api/mix/v1/plan/cancelPlan"  # New endpoint to cancel TP/SL plans
+PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"  # Updated to v1 endpoint
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -84,24 +82,25 @@ def generate_signature(timestamp, method, path, query_string="", body="", secret
     signature = base64.b64encode(hmac_obj.digest()).decode('utf-8')
     return signature
 
-# Function to place market order
-def place_order(base_symbol, side, trade_side, quantity):
+# Function to place market order with preset TP/SL
+def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price=None):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v2/mix/order/place-order"
-    symbol = base_symbol  # Use base_symbol for v2 API
+    path = "/api/mix/v1/order/placeOrder"
+    full_symbol = symbols_info[base_symbol]['full_symbol']  # Use full_symbol for v1 API
     
     params = {
-        "symbol": symbol,
-        "productType": trading_params["product_type"],
-        "marginMode": trading_params["margin_mode"],
+        "symbol": full_symbol,
         "marginCoin": "USDT",
         "size": str(quantity),
         "side": side,
-        "tradeSide": trade_side,
         "orderType": "market",
-        "force": "ioc",
         "clientOid": f"{base_symbol}_{timestamp}"
     }
+    
+    # Add TP/SL if provided (for opening positions)
+    if trade_side == 'open' and tp_price and sl_price:
+        params["presetTakeProfitPrice"] = str(round(float(tp_price), 1))
+        params["presetStopLossPrice"] = str(round(float(sl_price), 1))
 
     body = json.dumps(params, separators=(',', ':'))
     headers = {
@@ -117,8 +116,11 @@ def place_order(base_symbol, side, trade_side, quantity):
         response.raise_for_status()
         data = response.json()
         if data.get('code') == "00000" and data.get('data'):
-            order_id = data['data'].get('orderId') or data['data'][0].get('orderId')
-            print(f"Order placed for {base_symbol}: {side}/{trade_side} - OrderId: {order_id}")
+            order_id = data['data'].get('orderId')
+            if trade_side == 'open' and tp_price and sl_price:
+                print(f"Order placed for {base_symbol}: {side}/{trade_side} with TP {tp_price} and SL {sl_price} - OrderId: {order_id}")
+            else:
+                print(f"Order placed for {base_symbol}: {side}/{trade_side} - OrderId: {order_id}")
             return order_id
         else:
             print(f"Failed to place order for {base_symbol}: {data}")
@@ -128,87 +130,6 @@ def place_order(base_symbol, side, trade_side, quantity):
         status_code = e.response.status_code if e.response else "Unknown"
         print(f"Error placing order for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
         return None
-
-# Function to place Position TP/SL order (using v1 API)
-def place_positions_tpsl(base_symbol, hold_side, plan_type, trigger_price):
-    timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/plan/placePositionsTPSL"
-    full_symbol = symbols_info[base_symbol]['full_symbol']  # Use full_symbol for v1 API
-    
-    # Round trigger_price to 1 decimal place to match checkScale=1
-    trigger_price = round(float(trigger_price), 1)
-    
-    params = {
-        "marginCoin": "USDT",
-        "symbol": full_symbol,
-        "planType": plan_type,  # pos_profit or pos_loss
-        "triggerPrice": str(trigger_price),
-        "triggerType": trading_params["tp_trigger_type"] if plan_type == "pos_profit" else trading_params["sl_trigger_type"],
-        "holdSide": hold_side,
-        "clientOid": f"{base_symbol}_{plan_type}_{timestamp}"
-    }
-
-    body = json.dumps(params, separators=(',', ':'))
-    headers = {
-        "ACCESS-KEY": BITGET_API_KEY,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
-        "Content-Type": "application/json",
-        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
-    }
-
-    try:
-        response = requests.post(PLACE_POSITIONS_TPSL_URL, headers=headers, data=body)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('code') == "00000" and data.get('data'):
-            order_id = data['data'].get('orderId')
-            print(f"{plan_type.capitalize()} order placed for {base_symbol}: Trigger {trigger_price} - OrderId: {order_id}")
-            return order_id
-        else:
-            print(f"Failed to place {plan_type} for {base_symbol}: {data}")
-            return None
-    except requests.exceptions.RequestException as e:
-        response_text = e.response.text if e.response else "No response body"
-        print(f"Error placing {plan_type} for {base_symbol}: {e} - Response: {response_text}")
-        return None
-
-# Function to cancel existing TP/SL plans
-def cancel_tpsl_plan(base_symbol, plan_type, order_id):
-    timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/plan/cancelPlan"
-    full_symbol = symbols_info[base_symbol]['full_symbol']
-    
-    params = {
-        "symbol": full_symbol,
-        "marginCoin": "USDT",
-        "planType": plan_type,  # pos_profit or pos_loss
-        "orderId": str(order_id)
-    }
-
-    body = json.dumps(params, separators=(',', ':'))
-    headers = {
-        "ACCESS-KEY": BITGET_API_KEY,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
-        "Content-Type": "application/json",
-        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
-    }
-
-    try:
-        response = requests.post(CANCEL_PLAN_URL, headers=headers, data=body)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('code') == "00000":
-            print(f"Canceled {plan_type} plan for {base_symbol}: OrderId {order_id}")
-            return True
-        else:
-            print(f"Failed to cancel {plan_type} plan for {base_symbol}: {data}")
-            return False
-    except requests.exceptions.RequestException as e:
-        response_text = e.response.text if e.response else "No response body"
-        print(f"Error canceling {plan_type} plan for {base_symbol}: {e} - Response: {response_text}")
-        return False
 
 # Async function to set trading parameters
 async def set_trading_parameters(base_symbol, trade_side, side):
@@ -285,18 +206,17 @@ async def place_market_buy_order(base_symbol, quantity, order_num, trade_side='o
             if not await set_trading_parameters(base_symbol, trade_side, 'buy'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(base_symbol))['close'])
-            order_id = place_order(base_symbol, 'buy', trade_side, quantity)
-            if order_id and trade_side == 'open':
+            if trade_side == 'open':
                 tp_price = latest_price * (1 + trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 - trading_params['sl_percentage'] / 100)
-                tp_order_id = place_positions_tpsl(base_symbol, 'long', 'pos_profit', tp_price)
-                sl_order_id = place_positions_tpsl(base_symbol, 'long', 'pos_loss', sl_price)
-                if not tp_order_id or not sl_order_id:
-                    raise Exception("Failed to place TP or SL")
-                print(f"Order #{order_num} - Market Buy Order with TP/SL placed for {base_symbol}: {order_id}")
-            elif order_id:
+                order_id = place_order(base_symbol, 'buy', trade_side, quantity, tp_price, sl_price)
+            else:
+                order_id = place_order(base_symbol, 'buy', trade_side, quantity)
+            if order_id:
                 print(f"Order #{order_num} - Market Buy Order placed for {base_symbol}: {order_id}")
-            return order_id
+                return order_id
+            else:
+                raise Exception("Order placement returned no ID")
         except Exception as e:
             attempt += 1
             print(f"Order #{order_num} - Error placing Market Buy Order for {base_symbol} (Attempt {attempt}/{retries}): {e}")
@@ -312,18 +232,17 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
             if not await set_trading_parameters(base_symbol, trade_side, 'sell'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(base_symbol))['close'])
-            order_id = place_order(base_symbol, 'sell', trade_side, quantity)
-            if order_id and trade_side == 'open':
+            if trade_side == 'open':
                 tp_price = latest_price * (1 - trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 + trading_params['sl_percentage'] / 100)
-                tp_order_id = place_positions_tpsl(base_symbol, 'short', 'pos_profit', tp_price)
-                sl_order_id = place_positions_tpsl(base_symbol, 'short', 'pos_loss', sl_price)
-                if not tp_order_id or not sl_order_id:
-                    raise Exception("Failed to place TP or SL")
-                print(f"Order #{order_num} - Market Sell Order with TP/SL placed for {base_symbol}: {order_id}")
-            elif order_id:
+                order_id = place_order(base_symbol, 'sell', trade_side, quantity, tp_price, sl_price)
+            else:
+                order_id = place_order(base_symbol, 'sell', trade_side, quantity)
+            if order_id:
                 print(f"Order #{order_num} - Market Sell Order placed for {base_symbol}: {order_id}")
-            return order_id
+                return order_id
+            else:
+                raise Exception("Order placement returned no ID")
         except Exception as e:
             attempt += 1
             print(f"Order #{order_num} - Error placing Market Sell Order for {base_symbol} (Attempt {attempt}/{retries}): {e}")
@@ -331,8 +250,8 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
                 await asyncio.sleep(delay)
     return None
 
-# Async function to cancel an open order and its TP/SL plans
-async def close_position_and_cancel_plans(base_symbol, position_side, position_size, order_num):
+# Async function to close an existing position
+async def close_position(base_symbol, position_side, position_size, order_num):
     try:
         if position_side == 'long':
             close_order_id = await place_market_sell_order(base_symbol, position_size, order_num, 'close')
@@ -340,8 +259,6 @@ async def close_position_and_cancel_plans(base_symbol, position_side, position_s
             close_order_id = await place_market_buy_order(base_symbol, position_size, order_num, 'close')
         
         if close_order_id:
-            # Cancel any existing TP/SL plans (we don’t have the order IDs, so this is a placeholder)
-            # In practice, you’d need to track TP/SL order IDs or fetch them via API
             print(f"Closed existing {position_side} position for {base_symbol}: OrderId {close_order_id}")
             return True
         else:
@@ -398,7 +315,7 @@ async def ema_strategy():
                         if (current_signal == 'long' and position_side == 'short') or \
                            (current_signal == 'short' and position_side == 'long'):
                             trades_placed += 1
-                            if await close_position_and_cancel_plans(base_symbol, position_side, position_size, trades_placed):
+                            if await close_position(base_symbol, position_side, position_size, trades_placed):
                                 open_orders[base_symbol] = None
                                 last_order_types[base_symbol] = None
                             else:
