@@ -15,10 +15,10 @@ trading_params = {
     "margin_mode": "isolated",
     "leverage": 3,
     "product_type": "USDT-FUTURES",
-    "tp_trigger_type": "mark_price",  # Use mark_price for TP/SL triggering
+    "tp_trigger_type": "mark_price",
     "sl_trigger_type": "mark_price",
-    "tp_percentage": 5,  # 5% take profit
-    "sl_percentage": 2   # 2% stop loss
+    "tp_percentage": 5,
+    "sl_percentage": 2
 }
 
 # API endpoints for Bitget
@@ -29,7 +29,7 @@ CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
-    url = f"{CONTRACTS_URL}?productType=umcbl"
+    url = f"{CONTRACTS_URL}?productType=usdt-futures"  # Changed from umcbl to usdt-futures
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -40,11 +40,12 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        symbol = item['symbol']
+                        # Strip _UMCBL or similar suffix if present, keep base symbol (e.g., ETHUSDT)
+                        symbol = item['symbol'].split('_')[0]
                         usdt_pairs[symbol] = min_trade_num
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
-                        usdt_pairs[item['symbol']] = 0.0001
+                        usdt_pairs[item['symbol'].split('_')[0]] = 0.0001
             return usdt_pairs
         else:
             print("Unexpected data format.")
@@ -85,13 +86,13 @@ def place_order(symbol, side, trade_side, quantity):
     path = "/api/v2/mix/order/place-order"
     
     params = {
-        "symbol": symbol,
+        "symbol": symbol,  # Use base symbol (e.g., ETHUSDT)
         "productType": trading_params["product_type"],
         "marginMode": trading_params["margin_mode"],
         "marginCoin": "USDT",
         "size": str(quantity),
-        "side": side,  # 'buy' or 'sell'
-        "tradeSide": trade_side,  # 'open' or 'close'
+        "side": side,
+        "tradeSide": trade_side,
         "orderType": "market",
         "force": "ioc",
         "clientOid": f"{symbol}_{timestamp}"
@@ -130,11 +131,11 @@ def place_tpsl_order(symbol, hold_side, quantity, entry_price, plan_type, trigge
         "marginCoin": "USDT",
         "productType": trading_params["product_type"],
         "symbol": symbol,
-        "planType": plan_type,  # 'profit_plan' or 'loss_plan'
+        "planType": plan_type,
         "triggerPrice": str(trigger_price),
         "triggerType": trading_params["tp_trigger_type"] if plan_type == "profit_plan" else trading_params["sl_trigger_type"],
-        "executePrice": "0",  # Market price execution
-        "holdSide": hold_side,  # 'long' or 'short'
+        "executePrice": "0",
+        "holdSide": hold_side,
         "size": str(quantity),
         "clientOid": f"{symbol}_{plan_type}_{timestamp}"
     }
@@ -235,7 +236,6 @@ async def place_market_buy_order(symbol, quantity, order_num, trade_side='open',
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
             order_id = place_order(symbol, 'buy', trade_side, quantity)
             if order_id and trade_side == 'open':
-                # Set TP/SL for long position
                 tp_price = latest_price * (1 + trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 - trading_params['sl_percentage'] / 100)
                 place_tpsl_order(symbol, 'long', quantity, latest_price, 'profit_plan', tp_price)
@@ -261,7 +261,6 @@ async def place_market_sell_order(symbol, quantity, order_num, trade_side='open'
             latest_price = float((await exchange.fetch_ticker(symbol))['close'])
             order_id = place_order(symbol, 'sell', trade_side, quantity)
             if order_id and trade_side == 'open':
-                # Set TP/SL for short position
                 tp_price = latest_price * (1 - trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 + trading_params['sl_percentage'] / 100)
                 place_tpsl_order(symbol, 'short', quantity, latest_price, 'profit_plan', tp_price)
@@ -358,7 +357,7 @@ async def ema_strategy():
                             last_order_types[symbol] = 'SELL'
 
             print(f"\nCycle completed. Total trades placed: {trades_placed}")
-            await asyncio.sleep(900)  # 30 minutes
+            await asyncio.sleep(900)
             
         except Exception as e:
             print(f'An error occurred in cycle: {e}')
