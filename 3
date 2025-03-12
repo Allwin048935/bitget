@@ -24,9 +24,10 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/v1/mix/order/place-order"
-PLACE_TPSL_URL = f"{BASE_URL}/api/v1/mix/order/place-tpsl-order"
+PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
+PLACE_TPSL_URL = f"{BASE_URL}/api/v2/mix/order/place-tpsl-order"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
+ACCOUNT_URL = f"{BASE_URL}/api/v2/mix/account/accounts"  # For testing credentials
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
@@ -41,8 +42,8 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        full_symbol = item['symbol']  # e.g., BTCUSDT_UMCBL
-                        base_symbol = item['symbol'].split('_')[0]  # e.g., BTCUSDT
+                        full_symbol = item['symbol']
+                        base_symbol = item['symbol'].split('_')[0]
                         usdt_pairs[base_symbol] = {'full_symbol': full_symbol, 'min_amount': min_trade_num}
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
@@ -79,7 +80,7 @@ last_signals = {symbol: None for symbol in symbols}
 # Function to generate signature for Bitget API
 def generate_signature(timestamp, method, path, query_string="", body="", secret=BITGET_API_SECRET):
     message = f"{timestamp}{method.upper()}{path}{body}" if not query_string else f"{timestamp}{method.upper()}{path}?{query_string}{body}"
-    print(f"Signature message: {message}")  # Clean debug output
+    print(f"Signature message: {message}")
     hmac_obj = hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     signature = base64.b64encode(hmac_obj.digest()).decode('utf-8')
     print(f"Generated signature: {signature}")
@@ -88,7 +89,7 @@ def generate_signature(timestamp, method, path, query_string="", body="", secret
 # Function to place market order
 def place_order(base_symbol, side, trade_side, quantity):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v1/mix/order/place-order"
+    path = "/api/v2/mix/order/place-order"
     full_symbol = symbols_info[base_symbol]['full_symbol']
     
     params = {
@@ -113,11 +114,13 @@ def place_order(base_symbol, side, trade_side, quantity):
         "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
     }
 
-    print(f"Request body: {body}")  # Debug: Log exact body being sent
-    print(f"Headers: {headers}")    # Debug: Log headers
+    print(f"Request body: {body}")
+    print(f"Headers: {headers}")
 
     try:
         response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
+        print(f"Response status: {response.status_code}")
+        print(f"Response body: {response.text}")
         response.raise_for_status()
         data = response.json()
         if data.get('code') == "00000" and data.get('data'):
@@ -129,13 +132,14 @@ def place_order(base_symbol, side, trade_side, quantity):
             return None
     except requests.exceptions.RequestException as e:
         response_text = e.response.text if e.response else "No response body"
-        print(f"Error placing order for {base_symbol}: {e} - Response: {response_text}")
+        status_code = e.response.status_code if e.response else "Unknown"
+        print(f"Error placing order for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
         return None
 
 # Function to place TP/SL order
 def place_tpsl_order(base_symbol, hold_side, quantity, entry_price, plan_type, trigger_price):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v1/mix/order/place-tpsl-order"
+    path = "/api/v2/mix/order/place-tpsl-order"
     full_symbol = symbols_info[base_symbol]['full_symbol']
     
     params = {
@@ -222,7 +226,8 @@ async def fetch_ohlcv(base_symbol, timeframe, limit):
 # Function to calculate quantity
 def calculate_quantity(base_symbol, latest_close):
     min_amount = symbols_info.get(base_symbol, {'min_amount': 0.0001})['min_amount']
-    quantity = min_amount * 1.01
+    quantity = max(min_amount, min_amount * 1.01)  # Ensure at least min_amount
+    print(f"Calculated quantity for {base_symbol}: {quantity} (min_amount: {min_amount})")
     return quantity
 
 # Async function to check current position
