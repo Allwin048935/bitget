@@ -16,8 +16,8 @@ trading_params = {
     "margin_mode": "isolated",
     "leverage": 3,
     "product_type": "USDT-FUTURES",
-    "tp_trigger_type": "mark_price",
-    "sl_trigger_type": "mark_price",
+    "tp_trigger_type": "fill_price",
+    "sl_trigger_type": "fill_price",
     "tp_percentage": 5,
     "sl_percentage": 2
 }
@@ -306,10 +306,10 @@ async def ema_strategy():
                 current_histogram = historical_data['macd'].iloc[-2]
                 prev_histogram = historical_data['macd'].iloc[-3]
                 
-                if current_histogram < prev_histogram:
+                if current_histogram > prev_histogram:
                     current_signal = 'long'
                     print(f'{base_symbol} Potential Buy Signal')
-                elif current_histogram > prev_histogram:
+                elif current_histogram < prev_histogram:
                     current_signal = 'short'
                     print(f'{base_symbol} Potential Sell Signal')
                 else:
