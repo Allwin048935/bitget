@@ -24,7 +24,7 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"  # Updated to v1 endpoint
+PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -86,18 +86,18 @@ def generate_signature(timestamp, method, path, query_string="", body="", secret
 def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price=None):
     timestamp = str(int(time.time() * 1000))
     path = "/api/mix/v1/order/placeOrder"
-    full_symbol = symbols_info[base_symbol]['full_symbol']  # Use full_symbol for v1 API
+    full_symbol = symbols_info[base_symbol]['full_symbol']  # e.g., BTCUSDT_UMCBL
     
     params = {
         "symbol": full_symbol,
         "marginCoin": "USDT",
         "size": str(quantity),
-        "side": side,
+        "side": side,  # buy or sell
         "orderType": "market",
         "clientOid": f"{base_symbol}_{timestamp}"
     }
     
-    # Add TP/SL if provided (for opening positions)
+    # Add TP/SL for opening positions
     if trade_side == 'open' and tp_price and sl_price:
         params["presetTakeProfitPrice"] = str(round(float(tp_price), 1))
         params["presetStopLossPrice"] = str(round(float(sl_price), 1))
@@ -111,10 +111,14 @@ def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price
         "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
     }
 
+    print(f"Request params for {base_symbol}: {params}")
+    print(f"Request headers: {headers}")
+
     try:
         response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
         response.raise_for_status()
         data = response.json()
+        print(f"Response for {base_symbol}: {data}")
         if data.get('code') == "00000" and data.get('data'):
             order_id = data['data'].get('orderId')
             if trade_side == 'open' and tp_price and sl_price:
