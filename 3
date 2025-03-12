@@ -25,12 +25,14 @@ trading_params = {
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
-PLACE_TPSL_URL = f"{BASE_URL}/api/v2/mix/order/place-tpsl-order"
+PLACE_POSITIONS_TPSL_URL = f"{BASE_URL}/api/mix/v1/plan/placePositionsTPSL"  # Updated TP/SL endpoint
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
-    url = f"{CONTRACTS_URL}?productType=umcbl"
+    url =   
+
+ f"{CONTRACTS_URL}?productType=umcbl"
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -89,8 +91,7 @@ def generate_signature(timestamp, method, path, query_string="", body="", secret
 def place_order(base_symbol, side, trade_side, quantity):
     timestamp = str(int(time.time() * 1000))
     path = "/api/v2/mix/order/place-order"
-    # Use base_symbol instead of full_symbol for v2 API
-    symbol = base_symbol  # e.g., BTCUSDT
+    symbol = base_symbol  # Use base_symbol for v2 API
     
     params = {
         "symbol": symbol,
@@ -136,22 +137,19 @@ def place_order(base_symbol, side, trade_side, quantity):
         print(f"Error placing order for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
         return None
 
-# Function to place TP/SL order
-def place_tpsl_order(base_symbol, hold_side, quantity, entry_price, plan_type, trigger_price):
+# Function to place Position TP/SL order (using v1 API)
+def place_positions_tpsl(base_symbol, hold_side, plan_type, trigger_price):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v2/mix/order/place-tpsl-order"
-    # Use base_symbol instead of full_symbol for v2 API
-    symbol = base_symbol
+    path = "/api/mix/v1/plan/placePositionsTPSL"
+    full_symbol = symbols_info[base_symbol]['full_symbol']  # Use full_symbol for v1 API
     
     params = {
         "marginCoin": "USDT",
-        "productType": trading_params["product_type"],
-        "symbol": symbol,
-        "planType": plan_type,
+        "symbol": full_symbol,  # e.g., BTCUSDT_UMCBL
+        "planType": plan_type,  # pos_profit or pos_loss
         "triggerPrice": str(trigger_price),
-        "triggerType": trading_params["tp_trigger_type"] if plan_type == "profit_plan" else trading_params["sl_trigger_type"],
+        "triggerType": trading_params["tp_trigger_type"] if plan_type == "pos_profit" else trading_params["sl_trigger_type"],
         "holdSide": hold_side,
-        "size": str(quantity),
         "clientOid": f"{base_symbol}_{plan_type}_{timestamp}"
     }
 
@@ -164,8 +162,11 @@ def place_tpsl_order(base_symbol, hold_side, quantity, entry_price, plan_type, t
         "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
     }
 
+    print(f"Request body: {body}")
+    print(f"Headers: {headers}")
+
     try:
-        response = requests.post(PLACE_TPSL_URL, headers=headers, data=body)
+        response = requests.post(PLACE_POSITIONS_TPSL_URL, headers=headers, data=body)
         print(f"Response status: {response.status_code}")
         print(f"Response body: {response.text}")
         response.raise_for_status()
@@ -226,11 +227,15 @@ async def fetch_ohlcv(base_symbol, timeframe, limit):
         print(f"Error fetching OHLCV for {base_symbol}: {e}")
         return None
 
-# Function to calculate quantity
+# Function to calculate quantity (minimum $6 USD)
 def calculate_quantity(base_symbol, latest_close):
     min_amount = symbols_info.get(base_symbol, {'min_amount': 0.0001})['min_amount']
-    quantity = max(min_amount, min_amount * 1.01)  # Ensure at least min_amount
-    print(f"Calculated quantity for {base_symbol}: {quantity} (min_amount: {min_amount})")
+    min_value = min_amount * latest_close
+    if min_value < 6:
+        quantity = 6 / latest_close  # Adjust to meet $6 minimum
+    else:
+        quantity = min_amount * 1.01  # Slightly above minimum if already > $6
+    print(f"Calculated quantity for {base_symbol}: {quantity} (min_amount: {min_amount}, close: {latest_close}, value: {quantity * latest_close} USD)")
     return quantity
 
 # Async function to check current position
@@ -257,8 +262,8 @@ async def place_market_buy_order(base_symbol, quantity, order_num, trade_side='o
             if order_id and trade_side == 'open':
                 tp_price = latest_price * (1 + trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 - trading_params['sl_percentage'] / 100)
-                place_tpsl_order(base_symbol, 'long', quantity, latest_price, 'profit_plan', tp_price)
-                place_tpsl_order(base_symbol, 'long', quantity, latest_price, 'loss_plan', sl_price)
+                place_positions_tpsl(base_symbol, 'long', 'pos_profit', tp_price)
+                place_positions_tpsl(base_symbol, 'long', 'pos_loss', sl_price)
                 print(f"Order #{order_num} - Market Buy Order with TP/SL placed for {base_symbol}: {order_id}")
             elif order_id:
                 print(f"Order #{order_num} - Market Buy Order placed for {base_symbol}: {order_id}")
@@ -282,8 +287,8 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
             if order_id and trade_side == 'open':
                 tp_price = latest_price * (1 - trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 + trading_params['sl_percentage'] / 100)
-                place_tpsl_order(base_symbol, 'short', quantity, latest_price, 'profit_plan', tp_price)
-                place_tpsl_order(base_symbol, 'short', quantity, latest_price, 'loss_plan', sl_price)
+                place_positions_tpsl(base_symbol, 'short', 'pos_profit', tp_price)
+                place_positions_tpsl(base_symbol, 'short', 'pos_loss', sl_price)
                 print(f"Order #{order_num} - Market Sell Order with TP/SL placed for {base_symbol}: {order_id}")
             elif order_id:
                 print(f"Order #{order_num} - Market Sell Order placed for {base_symbol}: {order_id}")
