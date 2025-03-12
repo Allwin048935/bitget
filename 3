@@ -203,13 +203,17 @@ def calculate_quantity(base_symbol, latest_close):
     print(f"Calculated quantity for {base_symbol}: {quantity} (min_amount: {min_amount}, close: {latest_close}, value: {quantity * latest_close} USD)")
     return quantity
 
-# Async function to check current position
+# Async function to check current position (enhanced)
 async def check_position(base_symbol):
     try:
         positions = await exchange.fetch_positions([base_symbol])
+        print(f"Raw positions data for {base_symbol}: {positions}")
         for pos in positions:
             if pos['symbol'] == base_symbol and float(pos['contracts']) > 0:
-                return pos['side'].lower(), float(pos['contracts'])
+                side = pos['side'].lower()  # Ensure 'long' or 'short'
+                print(f"Detected position for {base_symbol}: {side}, size: {pos['contracts']}")
+                return side, float(pos['contracts'])
+        print(f"No open position detected for {base_symbol}")
         return None, 0
     except Exception as e:
         print(f"Error checking position for {base_symbol}: {e}")
@@ -354,10 +358,10 @@ async def ema_strategy():
                 current_histogram = historical_data['macd'].iloc[-2]
                 prev_histogram = historical_data['macd'].iloc[-3]
                 
-                if current_histogram > prev_histogram:
+                if current_histogram < prev_histogram:
                     current_signal = 'long'
                     print(f'{base_symbol} Potential Buy Signal')
-                elif current_histogram < prev_histogram:
+                elif current_histogram > prev_histogram:
                     current_signal = 'short'
                     print(f'{base_symbol} Potential Sell Signal')
                 else:
@@ -365,18 +369,31 @@ async def ema_strategy():
                     print(f'{base_symbol} No clear signal')
                     continue
 
-                if current_signal and last_signals.get(base_symbol) != current_signal:
-                    position_side, position_size = await check_position(base_symbol)
-                    if position_side:
-                        if (current_signal == 'long' and position_side == 'short') or \
-                           (current_signal == 'short' and position_side == 'long'):
-                            trades_placed += 1
-                            if not await close_position(base_symbol, position_side, position_size, trades_placed):
-                                print(f"Skipping new position for {base_symbol} due to failure closing existing position")
-                                continue
+                # Check existing position
+                position_side, position_size = await check_position(base_symbol)
+                
+                # If there's an existing position and it opposes the signal, close it first
+                if position_side:
+                    if (current_signal == 'long' and position_side == 'short') or \
+                       (current_signal == 'short' and position_side == 'long'):
+                        trades_placed += 1
+                        print(f"Attempting to close existing {position_side} position for {base_symbol}")
+                        if await close_position(base_symbol, position_side, position_size, trades_placed):
+                            print(f"Successfully closed {position_side} position for {base_symbol}")
                             open_orders[base_symbol] = None
                             last_order_types[base_symbol] = None
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(1)  # Respect rate limit
+                        else:
+                            print(f"Failed to close {position_side} position for {base_symbol}. Skipping new trade.")
+                            continue  # Skip opening new position if closure fails
+
+                # Only proceed with new position if signal is new and no opposing position exists
+                if current_signal and last_signals.get(base_symbol) != current_signal:
+                    # Double-check no position exists after closure attempt
+                    position_side, position_size = await check_position(base_symbol)
+                    if position_side:
+                        print(f"Position still exists ({position_side}) for {base_symbol} after closure attempt. Skipping.")
+                        continue
 
                     last_signals[base_symbol] = current_signal
                     
