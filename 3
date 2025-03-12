@@ -25,8 +25,6 @@ trading_params = {
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
-CANCEL_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/cancel-order"
-CURRENT_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/current"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -44,10 +42,14 @@ def get_usdt_pairs():
                         min_trade_num = float(item['minTradeNum'])
                         full_symbol = item['symbol']  # e.g., BTCUSDT_UMCBL
                         base_symbol = item['symbol'].split('_')[0]  # e.g., BTCUSDT
-                        usdt_pairs[base_symbol] = {'full_symbol': full_symbol, 'min_amount': min_trade_num}
+                        usdt_pairs[base_symbol] = {
+                            'full_symbol': full_symbol,
+                            'min_amount': min_trade_num,
+                            'size_precision': int(item.get('sizePrecision', 6))  # Default to 6 if not provided
+                        }
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
-                        usdt_pairs[item['symbol'].split('_')[0]] = {'full_symbol': item['symbol'], 'min_amount': 0.0001}
+                        usdt_pairs[item['symbol'].split('_')[0]] = {'full_symbol': item['symbol'], 'min_amount': 0.0001, 'size_precision': 6}
             return usdt_pairs
         else:
             print("Unexpected data format.")
@@ -91,6 +93,10 @@ def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price
     path = "/api/v2/mix/order/place-order"
     symbol = base_symbol
     
+    # Adjust quantity precision based on contract config
+    precision = symbols_info[base_symbol].get('size_precision', 6)
+    quantity = round(quantity, precision)
+    
     params = {
         "symbol": symbol,
         "productType": trading_params["product_type"],
@@ -121,9 +127,9 @@ def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price
 
     try:
         response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
+        print(f"Raw response for {base_symbol}: {response.text}")
         response.raise_for_status()
         data = response.json()
-        print(f"Response for {base_symbol}: {data}")
         if data.get('code') == "00000" and data.get('data'):
             order_id = data['data'].get('orderId')
             if trade_side == 'open' and tp_price and sl_price:
@@ -139,36 +145,6 @@ def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price
         status_code = e.response.status_code if e.response else "Unknown"
         print(f"Error placing order for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
         return None
-
-# Function to get current open orders
-def get_open_orders(base_symbol):
-    timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/order/current"
-    full_symbol = symbols_info[base_symbol]['full_symbol']  # e.g., BTCUSDT_UMCBL
-    
-    query_string = f"symbol={full_symbol}"
-    headers = {
-        "ACCESS-KEY": BITGET_API_KEY,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
-        "Content-Type": "application/json",
-        "ACCESS-SIGN": generate_signature(timestamp, "GET", path, query_string)
-    }
-
-    try:
-        response = requests.get(f"{CURRENT_ORDER_URL}?{query_string}", headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        print(f"Open orders response for {base_symbol}: {data}")
-        if data.get('code') == "00000" and data.get('data'):
-            return data['data']
-        else:
-            print(f"No open orders or error for {base_symbol}: {data}")
-            return []
-    except requests.exceptions.RequestException as e:
-        response_text = e.response.text if e.response else "No response body"
-        print(f"Error fetching open orders for {base_symbol}: {e} - Response: {response_text}")
-        return []
 
 # Async function to set trading parameters
 async def set_trading_parameters(base_symbol, trade_side, side):
@@ -222,6 +198,8 @@ def calculate_quantity(base_symbol, latest_close):
         quantity = 6 / latest_close
     else:
         quantity = min_amount * 1.01
+    precision = symbols_info[base_symbol].get('size_precision', 6)
+    quantity = round(quantity, precision)
     print(f"Calculated quantity for {base_symbol}: {quantity} (min_amount: {min_amount}, close: {latest_close}, value: {quantity * latest_close} USD)")
     return quantity
 
@@ -337,10 +315,10 @@ async def ema_strategy():
                 current_histogram = historical_data['macd'].iloc[-2]
                 prev_histogram = historical_data['macd'].iloc[-3]
                 
-                if current_histogram < prev_histogram:
+                if current_histogram > prev_histogram:
                     current_signal = 'long'
                     print(f'{base_symbol} Potential Buy Signal')
-                elif current_histogram > prev_histogram:
+                elif current_histogram < prev_histogram:
                     current_signal = 'short'
                     print(f'{base_symbol} Potential Sell Signal')
                 else:
@@ -351,17 +329,14 @@ async def ema_strategy():
                 if current_signal and last_signals.get(base_symbol) != current_signal:
                     position_side, position_size = await check_position(base_symbol)
                     if position_side:
-                        # Close existing position if opposite direction
                         if (current_signal == 'long' and position_side == 'short') or \
                            (current_signal == 'short' and position_side == 'long'):
                             trades_placed += 1
                             if not await close_position(base_symbol, position_side, position_size, trades_placed):
                                 print(f"Skipping new position for {base_symbol} due to failure closing existing position")
                                 continue
-                            # Reset tracking after closure
                             open_orders[base_symbol] = None
                             last_order_types[base_symbol] = None
-                            # Small delay to ensure position closure syncs
                             await asyncio.sleep(1)
 
                     last_signals[base_symbol] = current_signal
