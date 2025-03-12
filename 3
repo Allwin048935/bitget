@@ -24,8 +24,8 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
-PLACE_TPSL_URL = f"{BASE_URL}/api/v2/mix/order/place-tpsl-order"
+PLACE_ORDER_URL = f"{BASE_URL}/api/v1/mix/order/place-order"
+PLACE_TPSL_URL = f"{BASE_URL}/api/v1/mix/order/place-tpsl-order"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -88,7 +88,7 @@ def generate_signature(timestamp, method, path, query_string="", body="", secret
 # Function to place market order
 def place_order(base_symbol, side, trade_side, quantity):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v2/mix/order/place-order"
+    path = "/api/v1/mix/order/place-order"
     full_symbol = symbols_info[base_symbol]['full_symbol']
     
     params = {
@@ -135,7 +135,7 @@ def place_order(base_symbol, side, trade_side, quantity):
 # Function to place TP/SL order
 def place_tpsl_order(base_symbol, hold_side, quantity, entry_price, plan_type, trigger_price):
     timestamp = str(int(time.time() * 1000))
-    path = "/api/v2/mix/order/place-tpsl-order"
+    path = "/api/v1/mix/order/place-tpsl-order"
     full_symbol = symbols_info[base_symbol]['full_symbol']
     
     params = {
