@@ -24,7 +24,7 @@ trading_params = {
 
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
-PLACE_ORDER_URL = f"{BASE_URL}/api/mix/v1/order/placeOrder"
+PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"  # Updated to v2
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
@@ -76,30 +76,34 @@ open_orders = {symbol: None for symbol in symbols}
 last_signals = {symbol: None for symbol in symbols}
 
 # Function to generate signature for Bitget API
-def generate_signature(timestamp, method, path, query_string="", body="", secret=BITGET_API_SECRET):
-    message = f"{timestamp}{method.upper()}{path}{body}" if not query_string else f"{timestamp}{method.upper()}{path}?{query_string}{body}"
+def generate_signature(timestamp, method, path, body="", secret=BITGET_API_SECRET):
+    message = f"{timestamp}{method.upper()}{path}{body}"
+    print(f"Signature message for {path}: {message}")
     hmac_obj = hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     signature = base64.b64encode(hmac_obj.digest()).decode('utf-8')
     return signature
 
-# Function to place market order with preset TP/SL
+# Function to place market order with preset TP/SL (v2)
 def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price=None):
-    timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/order/placeOrder"
-    full_symbol = symbols_info[base_symbol]['full_symbol']  # e.g., BTCUSDT_UMCBL
+    timestamp = str(int(time.time() * 1000))  # Fresh timestamp
+    path = "/api/v2/mix/order/place-order"
+    symbol = base_symbol  # v2 uses base symbol (e.g., BTCUSDT)
     
     params = {
-        "symbol": full_symbol,
+        "symbol": symbol,
+        "productType": trading_params["product_type"],
+        "marginMode": trading_params["margin_mode"],
         "marginCoin": "USDT",
         "size": str(quantity),
         "side": side,  # buy or sell
+        "tradeSide": trade_side,  # open or close
         "orderType": "market",
         "clientOid": f"{base_symbol}_{timestamp}"
     }
     
     # Add TP/SL for opening positions
     if trade_side == 'open' and tp_price and sl_price:
-        params["presetTakeProfitPrice"] = str(round(float(tp_price), 1))
+        params["presetStopSurplusPrice"] = str(round(float(tp_price), 1))
         params["presetStopLossPrice"] = str(round(float(sl_price), 1))
 
     body = json.dumps(params, separators=(',', ':'))
@@ -108,7 +112,7 @@ def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
         "Content-Type": "application/json",
-        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
+        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, body)
     }
 
     print(f"Request params for {base_symbol}: {params}")
