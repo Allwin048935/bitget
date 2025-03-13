@@ -25,8 +25,8 @@ trading_params = {
 # API endpoints for Bitget
 BASE_URL = "https://api.bitget.com"
 PLACE_ORDER_URL = f"{BASE_URL}/api/v2/mix/order/place-order"
-PLACE_POSITIONS_TPSL_URL = f"{BASE_URL}/api/mix/v1/plan/placePositionsTPSL"
 CONTRACTS_URL = f"{BASE_URL}/api/mix/v1/market/contracts"
+CLOSE_POSITIONS_URL = f"{BASE_URL}/api/v2/mix/order/close-positions"
 
 # Function to fetch USDT trading pairs with minTradeNum dynamically
 def get_usdt_pairs():
@@ -41,12 +41,16 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        full_symbol = item['symbol']  # e.g., BTCUSDT_UMCBL
-                        base_symbol = item['symbol'].split('_')[0]  # e.g., BTCUSDT
-                        usdt_pairs[base_symbol] = {'full_symbol': full_symbol, 'min_amount': min_trade_num}
+                        full_symbol = item['symbol']
+                        base_symbol = item['symbol'].split('_')[0]
+                        usdt_pairs[base_symbol] = {
+                            'full_symbol': full_symbol,
+                            'min_amount': min_trade_num,
+                            'size_precision': int(item.get('sizePrecision', 6))
+                        }
                     except (KeyError, ValueError) as e:
                         print(f"Error parsing minTradeNum for {item['symbol']}: {e}")
-                        usdt_pairs[item['symbol'].split('_')[0]] = {'full_symbol': item['symbol'], 'min_amount': 0.0001}
+                        usdt_pairs[item['symbol'].split('_')[0]] = {'full_symbol': item['symbol'], 'min_amount': 0.0001, 'size_precision': 6}
             return usdt_pairs
         else:
             print("Unexpected data format.")
@@ -77,17 +81,21 @@ open_orders = {symbol: None for symbol in symbols}
 last_signals = {symbol: None for symbol in symbols}
 
 # Function to generate signature for Bitget API
-def generate_signature(timestamp, method, path, query_string="", body="", secret=BITGET_API_SECRET):
-    message = f"{timestamp}{method.upper()}{path}{body}" if not query_string else f"{timestamp}{method.upper()}{path}?{query_string}{body}"
+def generate_signature(timestamp, method, path, body="", secret=BITGET_API_SECRET):
+    message = f"{timestamp}{method.upper()}{path}{body}"
+    print(f"Signature message for {path}: {message}")
     hmac_obj = hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     signature = base64.b64encode(hmac_obj.digest()).decode('utf-8')
     return signature
 
-# Function to place market order
-def place_order(base_symbol, side, trade_side, quantity):
+# Function to place market order with preset TP/SL (v2)
+def place_order(base_symbol, side, trade_side, quantity, tp_price=None, sl_price=None):
     timestamp = str(int(time.time() * 1000))
     path = "/api/v2/mix/order/place-order"
-    symbol = base_symbol  # Use base_symbol for v2 API
+    symbol = base_symbol
+    
+    precision = symbols_info[base_symbol].get('size_precision', 6)
+    quantity = round(quantity, precision)
     
     params = {
         "symbol": symbol,
@@ -98,9 +106,12 @@ def place_order(base_symbol, side, trade_side, quantity):
         "side": side,
         "tradeSide": trade_side,
         "orderType": "market",
-        "force": "ioc",
         "clientOid": f"{base_symbol}_{timestamp}"
     }
+    
+    if trade_side == 'open' and tp_price and sl_price:
+        params["presetStopSurplusPrice"] = str(round(float(tp_price), 1))
+        params["presetStopLossPrice"] = str(round(float(sl_price), 1))
 
     body = json.dumps(params, separators=(',', ':'))
     headers = {
@@ -108,16 +119,23 @@ def place_order(base_symbol, side, trade_side, quantity):
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
         "Content-Type": "application/json",
-        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
+        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, body)
     }
+
+    print(f"Request params for {base_symbol}: {params}")
+    print(f"Request headers: {headers}")
 
     try:
         response = requests.post(PLACE_ORDER_URL, headers=headers, data=body)
+        print(f"Raw response for {base_symbol}: {response.text}")
         response.raise_for_status()
         data = response.json()
         if data.get('code') == "00000" and data.get('data'):
-            order_id = data['data'].get('orderId') or data['data'][0].get('orderId')
-            print(f"Order placed for {base_symbol}: {side}/{trade_side} - OrderId: {order_id}")
+            order_id = data['data'].get('orderId')
+            if trade_side == 'open' and tp_price and sl_price:
+                print(f"Order placed for {base_symbol}: {side}/{trade_side} with TP {tp_price} and SL {sl_price} - OrderId: {order_id}")
+            else:
+                print(f"Order placed for {base_symbol}: {side}/{trade_side} - OrderId: {order_id}")
             return order_id
         else:
             print(f"Failed to place order for {base_symbol}: {data}")
@@ -126,50 +144,6 @@ def place_order(base_symbol, side, trade_side, quantity):
         response_text = e.response.text if e.response else "No response body"
         status_code = e.response.status_code if e.response else "Unknown"
         print(f"Error placing order for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
-        return None
-
-# Function to place Position TP/SL order (using v1 API)
-def place_positions_tpsl(base_symbol, hold_side, plan_type, trigger_price):
-    timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/plan/placePositionsTPSL"
-    full_symbol = symbols_info[base_symbol]['full_symbol']  # Use full_symbol for v1 API
-    
-    # Round trigger_price to 1 decimal place to match checkScale=1
-    trigger_price = round(float(trigger_price), 1)
-    
-    params = {
-        "marginCoin": "USDT",
-        "symbol": full_symbol,
-        "planType": plan_type,  # pos_profit or pos_loss
-        "triggerPrice": str(trigger_price),
-        "triggerType": trading_params["tp_trigger_type"] if plan_type == "pos_profit" else trading_params["sl_trigger_type"],
-        "holdSide": hold_side,
-        "clientOid": f"{base_symbol}_{plan_type}_{timestamp}"
-    }
-
-    body = json.dumps(params, separators=(',', ':'))
-    headers = {
-        "ACCESS-KEY": BITGET_API_KEY,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
-        "Content-Type": "application/json",
-        "ACCESS-SIGN": generate_signature(timestamp, "POST", path, "", body)
-    }
-
-    try:
-        response = requests.post(PLACE_POSITIONS_TPSL_URL, headers=headers, data=body)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('code') == "00000" and data.get('data'):
-            order_id = data['data'].get('orderId')
-            print(f"{plan_type.capitalize()} order placed for {base_symbol}: Trigger {trigger_price} - OrderId: {order_id}")
-            return order_id
-        else:
-            print(f"Failed to place {plan_type} for {base_symbol}: {data}")
-            return None
-    except requests.exceptions.RequestException as e:
-        response_text = e.response.text if e.response else "No response body"
-        print(f"Error placing {plan_type} for {base_symbol}: {e} - Response: {response_text}")
         return None
 
 # Async function to set trading parameters
@@ -221,23 +195,86 @@ def calculate_quantity(base_symbol, latest_close):
     min_amount = symbols_info.get(base_symbol, {'min_amount': 0.0001})['min_amount']
     min_value = min_amount * latest_close
     if min_value < 6:
-        quantity = 6 / latest_close  # Adjust to meet $6 minimum
+        quantity = 6 / latest_close
     else:
-        quantity = min_amount * 1.01  # Slightly above minimum if already > $6
+        quantity = min_amount * 1.01
+    precision = symbols_info[base_symbol].get('size_precision', 6)
+    quantity = round(quantity, precision)
     print(f"Calculated quantity for {base_symbol}: {quantity} (min_amount: {min_amount}, close: {latest_close}, value: {quantity * latest_close} USD)")
     return quantity
 
-# Async function to check current position
+# Async function to check current position (enhanced)
 async def check_position(base_symbol):
     try:
         positions = await exchange.fetch_positions([base_symbol])
+        print(f"Raw positions data for {base_symbol}: {positions}")
         for pos in positions:
             if pos['symbol'] == base_symbol and float(pos['contracts']) > 0:
-                return pos['side'].lower(), float(pos['contracts'])
+                side = pos['side'].lower()  # Ensure 'long' or 'short'
+                print(f"Detected position for {base_symbol}: {side}, size: {pos['contracts']}")
+                return side, float(pos['contracts'])
+        print(f"No open position detected for {base_symbol}")
         return None, 0
     except Exception as e:
         print(f"Error checking position for {base_symbol}: {e}")
         return None, 0
+
+# Async function to close an existing position using flash close
+async def close_position(base_symbol, position_side, position_size, order_num):
+    try:
+        timestamp = str(int(time.time() * 1000))
+        path = "/api/v2/mix/order/close-positions"
+        
+        params = {
+            "symbol": base_symbol,
+            "productType": trading_params["product_type"],
+            "holdSide": position_side  # 'long' or 'short'
+        }
+        
+        body = json.dumps(params, separators=(',', ':'))
+        headers = {
+            "ACCESS-KEY": BITGET_API_KEY,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+            "Content-Type": "application/json",
+            "ACCESS-SIGN": generate_signature(timestamp, "POST", path, body)
+        }
+
+        print(f"Closing position request for {base_symbol}: {params}")
+        
+        response = requests.post(CLOSE_POSITIONS_URL, headers=headers, data=body)
+        print(f"Raw response for closing {base_symbol}: {response.text}")
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('code') == "00000" and data.get('data'):
+            success_list = data['data'].get('successList', [])
+            failure_list = data['data'].get('failureList', [])
+            
+            if success_list:
+                order_id = success_list[0].get('orderId')
+                print(f"Order #{order_num} - Successfully closed {position_side} position for {base_symbol}: OrderId {order_id}")
+                return True
+            elif failure_list:
+                error_msg = failure_list[0].get('errorMsg', 'Unknown error')
+                print(f"Order #{order_num} - Failed to close {position_side} position for {base_symbol}: {error_msg}")
+                return False
+            else:
+                print(f"Order #{order_num} - Unexpected response format for {base_symbol}")
+                return False
+        else:
+            print(f"Order #{order_num} - API error closing position for {base_symbol}: {data.get('msg', 'No message')}")
+            return False
+            
+    except requests.exceptions.RequestException as e:
+        response_text = e.response.text if e.response else "No response body"
+        status_code = e.response.status_code if e.response else "Unknown"
+        print(f"Order #{order_num} - Error closing position for {base_symbol}: {e} - Status: {status_code} - Response: {response_text}")
+        return False
+    except Exception as e:
+        print(f"Order #{order_num} - Unexpected error closing position for {base_symbol}: {e}")
+        return False
 
 # Async function to place a market buy order with TP/SL
 async def place_market_buy_order(base_symbol, quantity, order_num, trade_side='open', retries=2, delay=1):
@@ -247,18 +284,17 @@ async def place_market_buy_order(base_symbol, quantity, order_num, trade_side='o
             if not await set_trading_parameters(base_symbol, trade_side, 'buy'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(base_symbol))['close'])
-            order_id = place_order(base_symbol, 'buy', trade_side, quantity)
-            if order_id and trade_side == 'open':
+            if trade_side == 'open':
                 tp_price = latest_price * (1 + trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 - trading_params['sl_percentage'] / 100)
-                tp_order_id = place_positions_tpsl(base_symbol, 'long', 'pos_profit', tp_price)
-                sl_order_id = place_positions_tpsl(base_symbol, 'long', 'pos_loss', sl_price)
-                if not tp_order_id or not sl_order_id:
-                    raise Exception(f"Failed to set TP ({tp_order_id}) or SL ({sl_order_id}) for {base_symbol}")
-                print(f"Order #{order_num} - Market Buy Order with TP/SL placed for {base_symbol}: {order_id}")
-            elif order_id:
+                order_id = place_order(base_symbol, 'buy', trade_side, quantity, tp_price, sl_price)
+            else:
+                order_id = place_order(base_symbol, 'buy', trade_side, quantity)
+            if order_id:
                 print(f"Order #{order_num} - Market Buy Order placed for {base_symbol}: {order_id}")
-            return order_id
+                return order_id
+            else:
+                raise Exception("Order placement returned no ID")
         except Exception as e:
             attempt += 1
             print(f"Order #{order_num} - Error placing Market Buy Order for {base_symbol} (Attempt {attempt}/{retries}): {e}")
@@ -274,42 +310,23 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
             if not await set_trading_parameters(base_symbol, trade_side, 'sell'):
                 raise Exception("Failed to set trading parameters")
             latest_price = float((await exchange.fetch_ticker(base_symbol))['close'])
-            order_id = place_order(base_symbol, 'sell', trade_side, quantity)
-            if order_id and trade_side == 'open':
+            if trade_side == 'open':
                 tp_price = latest_price * (1 - trading_params['tp_percentage'] / 100)
                 sl_price = latest_price * (1 + trading_params['sl_percentage'] / 100)
-                tp_order_id = place_positions_tpsl(base_symbol, 'short', 'pos_profit', tp_price)
-                sl_order_id = place_positions_tpsl(base_symbol, 'short', 'pos_loss', sl_price)
-                if not tp_order_id or not sl_order_id:
-                    raise Exception(f"Failed to set TP ({tp_order_id}) or SL ({sl_order_id}) for {base_symbol}")
-                print(f"Order #{order_num} - Market Sell Order with TP/SL placed for {base_symbol}: {order_id}")
-            elif order_id:
+                order_id = place_order(base_symbol, 'sell', trade_side, quantity, tp_price, sl_price)
+            else:
+                order_id = place_order(base_symbol, 'sell', trade_side, quantity)
+            if order_id:
                 print(f"Order #{order_num} - Market Sell Order placed for {base_symbol}: {order_id}")
-            return order_id
+                return order_id
+            else:
+                raise Exception("Order placement returned no ID")
         except Exception as e:
             attempt += 1
             print(f"Order #{order_num} - Error placing Market Sell Order for {base_symbol} (Attempt {attempt}/{retries}): {e}")
             if attempt < retries:
                 await asyncio.sleep(delay)
     return None
-
-# Async function to close an existing position
-async def close_position(base_symbol, position_side, position_size, order_num):
-    try:
-        if position_side == 'long':
-            close_order_id = await place_market_sell_order(base_symbol, position_size, order_num, 'close')
-        else:  # short
-            close_order_id = await place_market_buy_order(base_symbol, position_size, order_num, 'close')
-        
-        if close_order_id:
-            print(f"Closed existing {position_side} position for {base_symbol}: OrderId {close_order_id}")
-            return True
-        else:
-            print(f"Failed to close existing {position_side} position for {base_symbol}")
-            return False
-    except Exception as e:
-        print(f"Error closing position for {base_symbol}: {e}")
-        return False
 
 # Main async trading function with MACD strategy
 async def ema_strategy():
@@ -341,10 +358,10 @@ async def ema_strategy():
                 current_histogram = historical_data['macd'].iloc[-2]
                 prev_histogram = historical_data['macd'].iloc[-3]
                 
-                if current_histogram > prev_histogram:
+                if current_histogram < prev_histogram:
                     current_signal = 'long'
                     print(f'{base_symbol} Potential Buy Signal')
-                elif current_histogram < prev_histogram:
+                elif current_histogram > prev_histogram:
                     current_signal = 'short'
                     print(f'{base_symbol} Potential Sell Signal')
                 else:
@@ -352,18 +369,31 @@ async def ema_strategy():
                     print(f'{base_symbol} No clear signal')
                     continue
 
+                # Check existing position
+                position_side, position_size = await check_position(base_symbol)
+                
+                # If there's an existing position and it opposes the signal, close it first
+                if position_side:
+                    if (current_signal == 'long' and position_side == 'short') or \
+                       (current_signal == 'short' and position_side == 'long'):
+                        trades_placed += 1
+                        print(f"Attempting to close existing {position_side} position for {base_symbol}")
+                        if await close_position(base_symbol, position_side, position_size, trades_placed):
+                            print(f"Successfully closed {position_side} position for {base_symbol}")
+                            open_orders[base_symbol] = None
+                            last_order_types[base_symbol] = None
+                            await asyncio.sleep(1)  # Respect rate limit
+                        else:
+                            print(f"Failed to close {position_side} position for {base_symbol}. Skipping new trade.")
+                            continue  # Skip opening new position if closure fails
+
+                # Only proceed with new position if signal is new and no opposing position exists
                 if current_signal and last_signals.get(base_symbol) != current_signal:
+                    # Double-check no position exists after closure attempt
                     position_side, position_size = await check_position(base_symbol)
                     if position_side:
-                        if (current_signal == 'long' and position_side == 'short') or \
-                           (current_signal == 'short' and position_side == 'long'):
-                            trades_placed += 1
-                            if await close_position(base_symbol, position_side, position_size, trades_placed):
-                                open_orders[base_symbol] = None
-                                last_order_types[base_symbol] = None
-                            else:
-                                print(f"Skipping new position for {base_symbol} due to failure closing existing position")
-                                continue
+                        print(f"Position still exists ({position_side}) for {base_symbol} after closure attempt. Skipping.")
+                        continue
 
                     last_signals[base_symbol] = current_signal
                     
@@ -387,10 +417,61 @@ async def ema_strategy():
             print(f'An error occurred in cycle: {e}')
             await asyncio.sleep(60)
 
-# Run the trading strategy
+# Test function to place and close a BTCUSDT position
+async def test_close_position():
+    base_symbol = "BTCUSDT"
+    print(f"\nStarting test for {base_symbol} position opening and closing...")
+
+    # Ensure no existing position
+    position_side, position_size = await check_position(base_symbol)
+    if position_side:
+        print(f"Existing {position_side} position found for {base_symbol}. Closing it first.")
+        if not await close_position(base_symbol, position_side, position_size, 1):
+            print(f"Failed to close existing position for {base_symbol}. Test aborted.")
+            return
+        await asyncio.sleep(2)  # Wait for closure to process
+
+    # Fetch latest price and calculate quantity
+    latest_candle = await exchange.fetch_ticker(base_symbol)
+    latest_close = float(latest_candle['close'])
+    quantity = calculate_quantity(base_symbol, latest_close)
+
+    # Place a long (buy) order
+    print(f"Placing a long order for {base_symbol}...")
+    order_id = await place_market_buy_order(base_symbol, quantity, 1, 'open')
+    if not order_id:
+        print(f"Failed to place buy order for {base_symbol}. Test aborted.")
+        return
+    
+    # Wait and verify position
+    await asyncio.sleep(5)  # Give time for order to settle
+    position_side, position_size = await check_position(base_symbol)
+    if position_side != 'long' or position_size <= 0:
+        print(f"Failed to verify long position for {base_symbol}. Test aborted.")
+        return
+    print(f"Long position confirmed: {position_side}, size: {position_size}")
+
+    # Close the position
+    print(f"Attempting to close the long position for {base_symbol}...")
+    if await close_position(base_symbol, position_side, position_size, 2):
+        print(f"Successfully closed the position for {base_symbol}.")
+    else:
+        print(f"Failed to close the position for {base_symbol}.")
+
+    # Verify closure
+    await asyncio.sleep(5)  # Wait for closure to process
+    position_side, position_size = await check_position(base_symbol)
+    if position_side is None and position_size == 0:
+        print(f"Test successful: No open position remains for {base_symbol}.")
+    else:
+        print(f"Test failed: Position still exists for {base_symbol} - {position_side}, size: {position_size}")
+
+# Run the trading strategy or test
 async def main():
     if symbols:
-        await ema_strategy()
+        # Uncomment the line below to run the full strategy instead of the test
+        # await ema_strategy()
+        await test_close_position()
     else:
         print("No symbols available to trade. Exiting...")
 
