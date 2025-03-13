@@ -41,8 +41,8 @@ def get_usdt_pairs():
                 if 'USDT' in item['symbol']:
                     try:
                         min_trade_num = float(item['minTradeNum'])
-                        full_symbol = item['symbol']
-                        base_symbol = item['symbol'].split('_')[0]
+                        full_symbol = item['symbol']  # e.g., BTCUSDT_UMCBL
+                        base_symbol = item['symbol'].split('_')[0]  # e.g., BTCUSDT
                         usdt_pairs[base_symbol] = {
                             'full_symbol': full_symbol,
                             'min_amount': min_trade_num,
@@ -206,10 +206,14 @@ def calculate_quantity(base_symbol, latest_close):
 # Async function to check current position (enhanced)
 async def check_position(base_symbol):
     try:
-        positions = await exchange.fetch_positions([base_symbol])
+        # Use the full symbol from symbols_info if available
+        full_symbol = symbols_info.get(base_symbol, {}).get('full_symbol', base_symbol)
+        positions = await exchange.fetch_positions([full_symbol])
         print(f"Raw positions data for {base_symbol}: {positions}")
         for pos in positions:
-            if pos['symbol'] == base_symbol and float(pos['contracts']) > 0:
+            # Match symbol flexibly (strip suffixes or use full symbol)
+            pos_symbol = pos['symbol']  # e.g., BTC/USDT:USDT
+            if base_symbol in pos_symbol and float(pos['contracts']) > 0:
                 side = pos['side'].lower()  # Ensure 'long' or 'short'
                 print(f"Detected position for {base_symbol}: {side}, size: {pos['contracts']}")
                 return side, float(pos['contracts'])
@@ -328,99 +332,11 @@ async def place_market_sell_order(base_symbol, quantity, order_num, trade_side='
                 await asyncio.sleep(delay)
     return None
 
-# Main async trading function with MACD strategy
-async def ema_strategy():
-    global symbols, symbols_info, last_order_types, open_orders, last_signals
-    
-    while True:
-        try:
-            symbols_info = get_usdt_pairs()
-            symbols = list(symbols_info.keys())
-            
-            last_order_types = {symbol: last_order_types.get(symbol) for symbol in symbols}
-            open_orders = {symbol: open_orders.get(symbol) for symbol in symbols}
-            last_signals = {symbol: last_signals.get(symbol) for symbol in symbols}
-            
-            trades_placed = 0
-
-            for i, base_symbol in enumerate(symbols, 1):
-                print(f"\nProcessing pair #{i}/{len(symbols)}: {base_symbol}")
-                
-                historical_data = await fetch_ohlcv(base_symbol, time_interval, 100)
-                if historical_data is None or len(historical_data) < 26:
-                    print(f"Not enough data for {base_symbol}. Skipping...")
-                    continue
-
-                latest_candle = await exchange.fetch_ticker(base_symbol)
-                latest_close = float(latest_candle['close'])
-                quantity = calculate_quantity(base_symbol, latest_close)
-
-                current_histogram = historical_data['macd'].iloc[-2]
-                prev_histogram = historical_data['macd'].iloc[-3]
-                
-                if current_histogram < prev_histogram:
-                    current_signal = 'long'
-                    print(f'{base_symbol} Potential Buy Signal')
-                elif current_histogram > prev_histogram:
-                    current_signal = 'short'
-                    print(f'{base_symbol} Potential Sell Signal')
-                else:
-                    current_signal = None
-                    print(f'{base_symbol} No clear signal')
-                    continue
-
-                # Check existing position
-                position_side, position_size = await check_position(base_symbol)
-                
-                # If there's an existing position and it opposes the signal, close it first
-                if position_side:
-                    if (current_signal == 'long' and position_side == 'short') or \
-                       (current_signal == 'short' and position_side == 'long'):
-                        trades_placed += 1
-                        print(f"Attempting to close existing {position_side} position for {base_symbol}")
-                        if await close_position(base_symbol, position_side, position_size, trades_placed):
-                            print(f"Successfully closed {position_side} position for {base_symbol}")
-                            open_orders[base_symbol] = None
-                            last_order_types[base_symbol] = None
-                            await asyncio.sleep(1)  # Respect rate limit
-                        else:
-                            print(f"Failed to close {position_side} position for {base_symbol}. Skipping new trade.")
-                            continue  # Skip opening new position if closure fails
-
-                # Only proceed with new position if signal is new and no opposing position exists
-                if current_signal and last_signals.get(base_symbol) != current_signal:
-                    # Double-check no position exists after closure attempt
-                    position_side, position_size = await check_position(base_symbol)
-                    if position_side:
-                        print(f"Position still exists ({position_side}) for {base_symbol} after closure attempt. Skipping.")
-                        continue
-
-                    last_signals[base_symbol] = current_signal
-                    
-                    if current_signal == 'long':
-                        trades_placed += 1
-                        order_id = await place_market_buy_order(base_symbol, quantity, trades_placed, 'open')
-                        if order_id:
-                            open_orders[base_symbol] = order_id
-                            last_order_types[base_symbol] = 'BUY'
-                    elif current_signal == 'short':
-                        trades_placed += 1
-                        order_id = await place_market_sell_order(base_symbol, quantity, trades_placed, 'open')
-                        if order_id:
-                            open_orders[base_symbol] = order_id
-                            last_order_types[base_symbol] = 'SELL'
-
-            print(f"\nCycle completed. Total trades placed: {trades_placed}")
-            await asyncio.sleep(900)
-            
-        except Exception as e:
-            print(f'An error occurred in cycle: {e}')
-            await asyncio.sleep(60)
-
 # Test function to place and close a BTCUSDT position
 async def test_close_position():
-    base_symbol = "BTCUSDT"
-    print(f"\nStarting test for {base_symbol} position opening and closing...")
+    base_symbol = "BTCUSDT"  # Base symbol without suffix
+    full_symbol = symbols_info.get(base_symbol, {}).get('full_symbol', base_symbol)  # e.g., BTCUSDT_UMCBL
+    print(f"\nStarting test for {base_symbol} (full symbol: {full_symbol}) position opening and closing...")
 
     # Ensure no existing position
     position_side, position_size = await check_position(base_symbol)
@@ -432,7 +348,7 @@ async def test_close_position():
         await asyncio.sleep(2)  # Wait for closure to process
 
     # Fetch latest price and calculate quantity
-    latest_candle = await exchange.fetch_ticker(base_symbol)
+    latest_candle = await exchange.fetch_ticker(full_symbol)
     latest_close = float(latest_candle['close'])
     quantity = calculate_quantity(base_symbol, latest_close)
 
@@ -447,7 +363,7 @@ async def test_close_position():
     await asyncio.sleep(5)  # Give time for order to settle
     position_side, position_size = await check_position(base_symbol)
     if position_side != 'long' or position_size <= 0:
-        print(f"Failed to verify long position for {base_symbol}. Test aborted.")
+        print(f"Failed to verify long position for {base_symbol}. Position: {position_side}, Size: {position_size}")
         return
     print(f"Long position confirmed: {position_side}, size: {position_size}")
 
@@ -468,12 +384,14 @@ async def test_close_position():
 
 # Run the trading strategy or test
 async def main():
-    if symbols:
-        # Uncomment the line below to run the full strategy instead of the test
-        # await ema_strategy()
-        await test_close_position()
-    else:
-        print("No symbols available to trade. Exiting...")
+    try:
+        if symbols:
+            await test_close_position()
+        else:
+            print("No symbols available to trade. Exiting...")
+    finally:
+        print("Closing exchange connection...")
+        await exchange.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
