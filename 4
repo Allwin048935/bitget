@@ -156,12 +156,12 @@ async def main():
                 cross_over, cross_under = check_macd_signal_crossover(historical_data)
 
                 if cross_over:
-                    message = f"/set_symbols #long #{symbol} {symbol}"
+                    message = f"#Long #{symbol}"
                     title = f"MACD Signal Line Cross Over for {symbol}"
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
                 elif cross_under:
-                    message = f"/set_symbols #short #{symbol} {symbol}"
+                    message = f"#Short #{symbol}"
                     title = f"MACD Signal Line Cross Under for {symbol}"
                     image_buffer = plot_candles(historical_data, symbol, title)
                     await send_telegram_message(symbol, message, image_buffer)
