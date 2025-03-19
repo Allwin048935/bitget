@@ -1,0 +1,161 @@
+import ccxt
+import pandas as pd
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+from io import BytesIO
+import asyncio
+import nest_asyncio
+from telegram import Bot
+import requests  # For fetching USDT pairs
+import ta  # Import ta library
+import config  # Import the config module
+
+interval = '12h'  # Adjust to '4h' if you need 4-hour candlesticks
+
+# Initialize Bitget client
+bitget = ccxt.bitget({
+    'apiKey': config.API_KEY,
+    'secret': config.API_SECRET,
+    'password': config.API_PASSWORD,  # Bitget requires a passphrase
+})
+
+# Function to fetch USDT trading pairs dynamically
+def get_usdt_pairs():
+    url = "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Check for HTTP errors
+        
+        data = response.json()
+
+        # Ensure 'data' is present and is a list
+        if 'data' in data and isinstance(data['data'], list):
+            # Filter for USDT trading pairs
+            usdt_pairs = [item['symbol'] for item in data['data'] if 'USDT' in item['symbol']]
+            return usdt_pairs
+        else:
+            print("Unexpected data format.")
+            return []
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return []
+    except ValueError as e:
+        print(f"Error parsing JSON: {e}")
+        return []
+
+# Function to get historical candlestick data
+def get_historical_data(symbol, interval, limit=50):
+    ohlcv = bitget.fetch_ohlcv(symbol, interval, limit=limit)
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
+    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+    return df
+
+# Function to calculate EMA using ta library
+def calculate_ema(df, period):
+    return ta.trend.EMAIndicator(df['Close'], window=period).ema_indicator()
+
+# Function to calculate MACD using ta library
+def calculate_macd(df):
+    macd = ta.trend.MACD(df['Close'])
+    df['macd'] = macd.macd()
+    df['signal'] = macd.macd_signal()
+    df['histogram'] = macd.macd_diff()
+
+# Function to check MACD and signal line crossover
+def check_macd_signal_crossover(df):
+    macd_prev = df['macd'].iloc[-3]
+    macd_curr = df['macd'].iloc[-2]
+    signal_prev = df['histogram'].iloc[-3]
+    signal_curr = df['histogram'].iloc[-2]
+
+    cross_over = macd_prev < macd_curr and signal_prev < signal_curr
+    cross_under = macd_prev > macd_curr and signal_prev > signal_curr
+
+    return cross_over, cross_under
+
+# Function to plot candlesticks with EMA, MACD, and Signal Lines
+def plot_candles(df, symbol, title):
+    # Calculate indicators
+    short_ema = calculate_ema(df, 3)
+    long_ema = calculate_ema(df, 7)
+    calculate_macd(df)
+
+    # Prepare colors for MACD histogram
+    macd_colors = ['green' if h > 0 else 'red' for h in df['histogram']]
+
+    # Prepare market colors and style for candlestick chart
+    mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
+    s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
+
+    # Plot candlestick chart with additional plots for EMA and MACD
+    fig, axlist = mpf.plot(
+        df[['Open', 'High', 'Low', 'Close']],  # Main candlestick data
+        figratio=(10, 6),
+        type="candle",
+        style=s,
+        tight_layout=True,
+        datetime_format='%H:%M',
+        ylabel="Price ($)",
+        addplot=[
+            mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-', ylabel="EMA"),
+            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-', ylabel="EMA"),
+            mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, ylabel="MACD"),
+            mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5),
+            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1)
+        ],
+        returnfig=True
+    )
+
+    # Set the title of the plot
+    axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
+
+    # Save plot to a buffer
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf
+
+# Function to send Telegram message and image
+async def send_telegram_message(symbol, message, image_buffer):
+    if last_alert_messages.get(symbol) != message:
+        await telegram_bot.send_message(chat_id=config.CHAT_ID, text=message)
+        await telegram_bot.send_photo(chat_id=config.CHAT_ID, photo=image_buffer)
+        last_alert_messages[symbol] = message
+
+# Dictionary to store the last alert messages for each symbol
+last_alert_messages = {}
+
+# Main function
+async def main():
+    usdt_pairs = get_usdt_pairs()  # Fetch USDT pairs dynamically
+    config.SELECTED_SYMBOLS = usdt_pairs  # Update config.SELECTED_SYMBOLS with fetched pairs
+
+    while True:
+        for symbol in config.SELECTED_SYMBOLS:
+            try:
+                historical_data = get_historical_data(symbol, interval)
+                calculate_macd(historical_data)
+                cross_over, cross_under = check_macd_signal_crossover(historical_data)
+
+                if cross_over:
+                    message = f"/set_symbols #long #{symbol} {symbol}"
+                    title = f"MACD Signal Line Cross Over for {symbol}"
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
+                elif cross_under:
+                    message = f"/set_symbols #short #{symbol} {symbol}"
+                    title = f"MACD Signal Line Cross Under for {symbol}"
+                    image_buffer = plot_candles(historical_data, symbol, title)
+                    await send_telegram_message(symbol, message, image_buffer)
+            except Exception as e:
+                print(f"Error processing {symbol}: {e}")
+        await asyncio.sleep(900)
+
+telegram_bot = Bot(token=config.TELEGRAM_TOKEN_RSI)
+nest_asyncio.apply()
+asyncio.run(main())
