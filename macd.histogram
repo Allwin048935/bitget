@@ -10,7 +10,7 @@ import requests  # For fetching USDT pairs
 import ta  # Import ta library
 import config  # Import the config module
 
-interval = '12h'  # Adjust to '4h' if you need 4-hour candlesticks
+interval = '1d'  # Adjust to '4h' if you need 4-hour candlesticks
 
 # Initialize Bitget client
 bitget = ccxt.bitget({
@@ -154,7 +154,7 @@ async def main():
                     await send_telegram_message(symbol, message, image_buffer)
             except Exception as e:
                 print(f"Error processing {symbol}: {e}")
-        await asyncio.sleep(900)
+        await asyncio.sleep(300)
 
 telegram_bot = Bot(token=config.TELEGRAM_TOKEN_RSI)
 nest_asyncio.apply()
