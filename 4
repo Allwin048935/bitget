@@ -23,6 +23,7 @@ def get_usdt_pairs():
     try:
         response = requests.get(url)
         response.raise_for_status()
+        
         data = response.json()
         if 'data' in data and isinstance(data['data'], list):
             usdt_pairs = [item['symbol'] for item in data['data'] if 'USDT' in item['symbol']]
@@ -54,24 +55,6 @@ def calculate_macd(df):
     df['signal'] = macd.macd_signal()
     df['histogram'] = macd.macd_diff()
 
-def calculate_fibonacci_levels(df):
-    # Find highest high and lowest low in the data
-    high = df['High'].max()
-    low = df['Low'].min()
-    diff = high - low
-    
-    # Common Fibonacci extension levels
-    fib_levels = {
-        '0.0%': low,
-        '23.6%': low + (diff * 0.236),
-        '38.2%': low + (diff * 0.382),
-        '61.8%': low + (diff * 0.618),
-        '100.0%': high,
-        '161.8%': low + (diff * 1.618),
-        '261.8%': low + (diff * 2.618)
-    }
-    return fib_levels
-
 def check_macd_signal_crossover(df):
     macd_prev = df['macd'].iloc[-3]
     macd_curr = df['macd'].iloc[-2]
@@ -81,27 +64,54 @@ def check_macd_signal_crossover(df):
     cross_under = macd_prev > macd_curr and signal_prev > signal_curr
     return cross_over, cross_under
 
+# New function to calculate Fibonacci retracement levels
+def calculate_fibonacci_levels(df):
+    high = df['High'].max()
+    low = df['Low'].min()
+    diff = high - low
+    
+    levels = {
+        '0.0%': high,
+        '23.6%': high - (0.236 * diff),
+        '38.2%': high - (0.382 * diff),
+        '50.0%': high - (0.5 * diff),
+        '61.8%': high - (0.618 * diff),
+        '100.0%': low
+    }
+    return levels
+
 def plot_candles(df, symbol, title):
-    # Calculate indicators
     short_ema = calculate_ema(df, 3)
     long_ema = calculate_ema(df, 7)
     calculate_macd(df)
     fib_levels = calculate_fibonacci_levels(df)
-    
-    # Prepare colors for MACD histogram
+
     macd_colors = ['green' if h > 0 else 'red' for h in df['histogram']]
-    
-    # Create horizontal lines for Fibonacci levels
-    fib_plots = [
-        mpf.make_addplot([level] * len(df), color='gray', linestyle='--', width=0.8)
-        for level in fib_levels.values()
-    ]
-    
-    # Prepare market colors and style
     mc = mpf.make_marketcolors(up='#2fc71e', down='#ed2f1a', inherit=True)
     s = mpf.make_mpf_style(base_mpl_style=['bmh', 'dark_background'], marketcolors=mc, y_on_right=True)
-    
-    # Plot candlestick chart with all indicators
+
+    # Create additional plots list including Fibonacci levels
+    add_plots = [
+        mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-', ylabel="EMA"),
+        mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-', ylabel="EMA"),
+        mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, ylabel="MACD"),
+        mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5),
+        mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1)
+    ]
+
+    # Add Fibonacci levels as horizontal lines
+    for level, price in fib_levels.items():
+        add_plots.append(
+            mpf.make_addplot(
+                [price] * len(df), 
+                color='yellow', 
+                linestyle='--', 
+                alpha=0.5,
+                label=f'Fib {level}'
+            )
+        )
+
+    # Plot the chart
     fig, axlist = mpf.plot(
         df[['Open', 'High', 'Low', 'Close']],
         figratio=(10, 6),
@@ -110,29 +120,20 @@ def plot_candles(df, symbol, title):
         tight_layout=True,
         datetime_format='%H:%M',
         ylabel="Price ($)",
-        addplot=[
-            mpf.make_addplot(short_ema, color='cyan', width=1.5, linestyle='-', ylabel="EMA"),
-            mpf.make_addplot(long_ema, color='magenta', width=1.5, linestyle='-', ylabel="EMA"),
-            mpf.make_addplot(df['macd'], panel=1, color='blue', width=1.5, ylabel="MACD"),
-            mpf.make_addplot(df['signal'], panel=1, color='orange', width=1.5),
-            mpf.make_addplot(df['histogram'], type='bar', color=macd_colors, panel=1)
-        ] + fib_plots,
+        addplot=add_plots,
         returnfig=True
     )
-    
-    # Add Fibonacci level labels
-    ax = axlist[0]
-    for label, level in fib_levels.items():
-        ax.text(0.02, level, f'{label}', transform=ax.get_yaxis_transform(),
-                color='white', alpha=0.7, fontsize=8)
-    
-    ax.set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
-    
+
+    # Add legend for Fibonacci levels
+    axlist[0].legend(loc='upper left', fontsize=8)
+
+    axlist[0].set_title(f"{symbol} - {title}", fontsize=25, style='italic', fontfamily='sans-serif')
+
     buf = BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
     buf.seek(0)
     plt.close(fig)
-    
+
     return buf
 
 async def send_telegram_message(symbol, message, image_buffer):
@@ -146,14 +147,14 @@ last_alert_messages = {}
 async def main():
     usdt_pairs = get_usdt_pairs()
     config.SELECTED_SYMBOLS = usdt_pairs
-    
+
     while True:
         for symbol in config.SELECTED_SYMBOLS:
             try:
                 historical_data = get_historical_data(symbol, interval)
                 calculate_macd(historical_data)
                 cross_over, cross_under = check_macd_signal_crossover(historical_data)
-                
+
                 if cross_over:
                     message = f"/set_symbols #long #{symbol} {symbol}"
                     title = f"MACD Signal Line Cross Over for {symbol}"
